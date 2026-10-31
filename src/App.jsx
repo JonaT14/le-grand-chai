@@ -1,10 +1,13 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useId } from 'react';
 import {
   Wine, Grid, AlertTriangle, Map as MapIcon, BookOpen, Sparkles,
   Plus, Camera, X, Search, Sliders, ExternalLink, Star,
   Move, Cloud, Download, Upload, Users,
   ChevronRight, Utensils, Copy, Check, Key, Globe, RefreshCw
 } from 'lucide-react';
+
+import { askGemini, readGeminiKey, DEFAULT_GEMINI_MODEL, SCAN_SCHEMA, SOMMELIER_SCHEMA, LABEL_SCHEMA, resolveSommelier, labelCandidates, safeHttpsUrl } from './ai.js';
+import { findFreeSlot, resizeWall, removeWall, loadCellar, scanFields } from './cellar.js';
 
 const CURRENT_YEAR = new Date().getFullYear();
 
@@ -22,7 +25,7 @@ const DRINK_CATEGORIES = {
     label: 'Cidre & Poiré',
     icon: '🍏',
     types: ['Cidre Brut', 'Cidre Demi-Sec', 'Cidre Doux', 'Poiré', 'Pommeau'],
-    defaultShape: 'champagne'
+    defaultShape: 'cider'
   },
   Alcool: {
     label: 'Spiritueux & Alcool',
@@ -38,17 +41,66 @@ function getCategoryFromType(type = 'Rouge') {
   return 'Vin';
 }
 
+function readPhoto(file) {
+  if (!file || file.size > 15 * 1024 * 1024) throw new Error('Choisissez une photo de moins de 15 Mo.');
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Impossible de lire cette photo.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Photo non prise en charge. Utilisez une image JPEG, PNG ou WebP.'));
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', 0.88));
+        } catch { reject(new Error('Impossible de préparer cette photo.')); }
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function emptyWine() {
+  return {
+    category: 'Vin', name: '', appellation: '', region: '', vintage: '', type: 'Rouge', bottleShape: 'bordeaux',
+    grapes: '', peakStart: CURRENT_YEAR, peakEnd: CURRENT_YEAR + 8, drinkLimit: CURRENT_YEAR + 12,
+    webRating: null, webReviewCount: 0, webUrl: '', userRating: null, userNotes: '',
+    tastingAdvice: '', foodPairing: '', customLabelUrl: null
+  };
+}
+
+function RatingInput({ value, onChange, label = 'Ma note' }) {
+  return <label className="flex items-center gap-2 text-xs text-amber-300">
+    {label}
+    <select aria-label={label} value={value ?? ''} onChange={e => onChange(e.target.value === '' ? null : Number(e.target.value))}
+      className="bg-stone-950 border border-amber-800/50 rounded-lg px-2 py-1.5">
+      <option value="">Non noté</option>
+      {Array.from({ length: 11 }, (_, i) => i / 2).map(note => <option key={note} value={note}>{note}/5</option>)}
+    </select>
+  </label>;
+}
+
 // ============================================================================
 // CONVERTISSEUR D'IMAGE WEB / IA SANS BLOCAGE CORS (PROXY WSRV.NL -> BASE64)
 // ============================================================================
-async function fetchImageAsLabelDataUrl(imageUrl, wine) {
+async function fetchImageAsLabelDataUrl(imageUrl) {
+  if (!/^data:image\/(jpeg|png|webp);base64,/.test(imageUrl) && !safeHttpsUrl(imageUrl)) throw new Error('Lien d’image HTTPS invalide.');
   const proxiedUrl = imageUrl.startsWith('data:')
     ? imageUrl
-    : `https://wsrv.nl/?url=${encodeURIComponent(imageUrl)}&w=420&h=580&fit=cover&output=jpg&q=85`;
+    : `https://wsrv.nl/?url=${encodeURIComponent(imageUrl)}&w=420&h=580&fit=contain&output=jpg&q=85`;
 
-  const response = await fetch(proxiedUrl);
+  const response = await fetch(proxiedUrl, { signal: AbortSignal.timeout(20000) });
   if (!response.ok) throw new Error('Image inaccessible');
   const blob = await response.blob();
+  if (!blob.type.startsWith('image/')) throw new Error('Le lien ne contient pas d’image.');
 
   const rawDataUrl = await new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -73,7 +125,7 @@ async function fetchImageAsLabelDataUrl(imageUrl, wine) {
   ctx.fillStyle = '#FAF6EE';
   ctx.fillRect(0, 0, 400, 560);
 
-  const scale = Math.max(400 / img.width, 560 / img.height);
+  const scale = Math.min(400 / img.width, 560 / img.height);
   const w = img.width * scale;
   const h = img.height * scale;
   ctx.drawImage(img, (400 - w) / 2, (560 - h) / 2, w, h);
@@ -718,17 +770,17 @@ function normalizeRegionId(regionName = '') {
 function RealisticBottleSVG({ wine, size = 'rack' }) {
   const isLarge = size === 'showcase';
   const category = getCategoryFromType(wine.type);
-  const shape = wine.bottleShape || DRINK_CATEGORIES[category].defaultShape;
+  const shape = category === 'Cidre' && (!wine.bottleShape || wine.bottleShape === 'champagne') ? 'cider' : wine.bottleShape || DRINK_CATEGORIES[category].defaultShape;
 
   // Couleurs réalistes du verre et du liquide selon le type
   const palette = useMemo(() => {
     const t = (wine.type || '').toLowerCase();
     if (category === 'Cidre') {
       return {
-        glassTop: '#243B1B',
-        glassMid: '#375828',
-        glassBot: '#182811',
-        liquid: '#D9821E',
+        glassTop: '#3A2910',
+        glassMid: '#4C3514',
+        glassBot: '#211A0B',
+        liquid: '#9D6B23',
         capsule: wine.capsuleColor || '#C89D32'
       };
     }
@@ -791,6 +843,11 @@ function RealisticBottleSVG({ wine, size = 'rack' }) {
       capsule: 'M 39,16 L 61,16 L 61,48 L 39,48 Z',
       labelBox: { x: 18, y: 132, w: 64, h: 82 }
     },
+    cider: {
+      body: 'M 40,20 L 60,20 L 61,68 C 61,88 82,99 84,128 L 84,236 Q 84,248 72,248 L 28,248 Q 16,248 16,236 L 16,128 C 18,99 39,88 39,68 Z',
+      capsule: 'M 39,20 L 61,20 L 61,42 L 39,42 Z',
+      labelBox: { x: 19, y: 126, w: 62, h: 86 }
+    },
     champagne: {
       body: 'M 38,18 L 62,18 L 63,65 C 64,92 86,112 86,148 L 86,238 C 86,245 80,248 72,248 L 28,248 C 20,248 14,245 14,238 L 14,148 C 14,112 36,92 37,65 Z',
       capsule: 'M 37,16 L 63,16 L 66,78 Q 50,85 34,78 Z',
@@ -809,14 +866,13 @@ function RealisticBottleSVG({ wine, size = 'rack' }) {
   };
 
   const currentShape = paths[shape] || paths.bordeaux;
-  const clipId = `bottle-clip-${wine.id}-${size}`;
-  const labelClipId = `label-clip-${wine.id}-${size}`;
-  const gradId = `bottle-grad-${wine.id}-${size}`;
+  const instanceId = useId().replace(/:/g, '');
+  const clipId = `bottle-clip-${instanceId}`;
+  const labelClipId = `label-clip-${instanceId}`;
+  const gradId = `bottle-grad-${instanceId}`;
   const lb = currentShape.labelBox;
 
-  // Ignore l'ancienne image PNG 520x720 cassée si présente
-  const hasValidCustomLabel = wine.customLabelUrl &&
-    !wine.customLabelUrl.startsWith('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAggAAALQ');
+  const hasValidCustomLabel = typeof wine.customLabelUrl === 'string' && (/^data:image\/(jpeg|png|webp);base64,/.test(wine.customLabelUrl) || safeHttpsUrl(wine.customLabelUrl));
 
   return (
     <svg
@@ -848,12 +904,13 @@ function RealisticBottleSVG({ wine, size = 'rack' }) {
 
         {/* Capsule / Coiffe */}
         <path d={currentShape.capsule} fill={palette.capsule} />
+        {shape === 'cider' && <rect x="37" y="27" width="26" height="39" fill="#35280F" opacity="0.7" />}
         <rect x="36" y="16" width="28" height="4" fill="rgba(255,255,255,0.22)" />
 
         {/* Collerette millésime */}
         <path d="M 33,68 Q 50,74 67,68 L 69,80 Q 50,86 31,80 Z" fill="#F5ECD7" stroke="#B69146" strokeWidth="0.8" />
         <text x="50" y="77" textAnchor="middle" fontSize="6.5" fontWeight="bold" fill="#2A1B12" fontFamily="Georgia, serif">
-          {wine.vintage}
+          {wine.vintage || 'S.M.'}
         </text>
 
         {/* ÉTIQUETTE : Soit image IA/Web/Scan haute définition, soit étiquette vectorielle */}
@@ -865,7 +922,7 @@ function RealisticBottleSVG({ wine, size = 'rack' }) {
               y={lb.y}
               width={lb.w}
               height={lb.h}
-              preserveAspectRatio="none"
+              preserveAspectRatio="xMidYMid meet"
             />
           </g>
         ) : (
@@ -897,7 +954,7 @@ function RealisticBottleSVG({ wine, size = 'rack' }) {
               fill={wine.accentColor || '#8C6D32'}
               fontFamily="Georgia, serif"
             >
-              {category === 'Cidre' ? 'CIDRE DE TERROIR' : category === 'Alcool' ? 'SPIRITUEUX D’EXCEPTION' : `GRAND VIN DE ${(wine.region || 'FRANCE').toUpperCase()}`}
+              {category === 'Cidre' ? (wine.type === 'Poiré' ? 'POIRÉ ARTISANAL' : wine.type === 'Pommeau' ? 'POMMEAU' : 'CIDRE DE TERROIR') : category === 'Alcool' ? 'SPIRITUEUX D’EXCEPTION' : `GRAND VIN DE ${(wine.region || 'FRANCE').toUpperCase()}`}
             </text>
 
             {/* Gravure miniature */}
@@ -964,6 +1021,11 @@ function RealisticBottleSVG({ wine, size = 'rack' }) {
         <path d="M 22,248 Q 50,234 78,248 Z" fill="rgba(0,0,0,0.45)" />
       </g>
 
+      {shape === 'cider' && <g>
+        <rect x="40" y="12" width="20" height="14" rx="4" fill="#BD8C4F" stroke="#6D4927" />
+        <path d="M 39,24 L 61,24 M 41,23 Q 36,48 40,57 M 59,23 Q 64,48 60,57 M 39,45 Q 50,49 61,45" fill="none" stroke="#C9C4AF" strokeWidth="1.3" />
+        <ellipse cx="50" cy="240" rx="25" ry="3" fill="#D29A33" opacity="0.25" />
+      </g>}
       {/* Contour extérieur du flacon */}
       <path d={currentShape.body} fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1" />
     </svg>
@@ -996,6 +1058,8 @@ export default function App() {
   const [history, setHistory] = useState(DEFAULT_HISTORY);
   const [selectedWallId, setSelectedWallId] = useState('mur-gauche');
   const [selectedWine, setSelectedWine] = useState(null);
+  const selectedWineRef = useRef(selectedWine);
+  selectedWineRef.current = selectedWine;
   const [movingWine, setMovingWine] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState('Tous');
@@ -1009,8 +1073,9 @@ export default function App() {
   const [cloudTab, setCloudTab] = useState('accounts');
 
   // Paramètres Cloud & IA
-  const [driveWebhookUrl, setDriveWebhookUrl] = useState(() => localStorage.getItem('lgc_drive_webhook_kava20') || '');
-  const [userGeminiKey, setUserGeminiKey] = useState(() => localStorage.getItem('lgc_gemini_api_key') || '');
+  const [driveWebhookUrl, setDriveWebhookUrl] = useState(() => localStorage.getItem('lgc_drive_webhook_kava20') ?? localStorage.getItem('kava20_drive_url') ?? '');
+  const [userGeminiKey, setUserGeminiKey] = useState(() => readGeminiKey(localStorage));
+  const [geminiModel, setGeminiModel] = useState(() => localStorage.getItem('lgc_gemini_model') || DEFAULT_GEMINI_MODEL);
   const [syncStatus, setSyncStatus] = useState('Prêt');
 
   // États du Studio d'Étiquette IA / Web
@@ -1018,10 +1083,20 @@ export default function App() {
   const [labelStatusMsg, setLabelStatusMsg] = useState('');
   const [customImageUrlInput, setCustomImageUrlInput] = useState('');
   const [webSearchCandidates, setWebSearchCandidates] = useState([]);
+  const [webSearchGrounding, setWebSearchGrounding] = useState(null);
 
   // États du Scanner IA
   const [isScanning, setIsScanning] = useState(false);
   const [scanPreview, setScanPreview] = useState(null);
+  const [scanError, setScanError] = useState('');
+  const [sommelierError, setSommelierError] = useState('');
+  const [wallError, setWallError] = useState('');
+  const [deletingWallId, setDeletingWallId] = useState(null);
+  const [destinationWallId, setDestinationWallId] = useState('');
+  const [addError, setAddError] = useState('');
+  const cellarRef = useRef({ walls, wines, history });
+  cellarRef.current = { walls, wines, history };
+  const accountEpoch = useRef(0);
 
   // États du Sommelier IA
   const [dishInput, setDishInput] = useState('');
@@ -1033,46 +1108,30 @@ export default function App() {
   const [mapFilterType, setMapFilterType] = useState('Tous');
 
   // Formulaire nouvelle bouteille (Vin, Cidre ou Alcool)
-  const [newWine, setNewWine] = useState({
-    category: 'Vin',
-    name: '',
-    appellation: '',
-    region: 'Bordeaux',
-    vintage: CURRENT_YEAR - 3,
-    type: 'Rouge',
-    bottleShape: 'bordeaux',
-    grapes: '',
-    peakStart: CURRENT_YEAR,
-    peakEnd: CURRENT_YEAR + 8,
-    drinkLimit: CURRENT_YEAR + 12,
-    webRating: 4.3,
-    webReviewCount: 850,
-    webUrl: '',
-    userRating: 4.5,
-    userNotes: '',
-    tastingAdvice: 'Servir à température de cave.',
-    foodPairing: '',
-    customLabelUrl: null
-  });
+  const [newWine, setNewWine] = useState(emptyWine);
 
-  // Chargement des données du compte actif (+ nettoyage auto d'une éventuelle ancienne étiquette PNG cassée)
+  // Chargement des données du compte actif et migration des sauvegardes précédentes
   useEffect(() => {
+    accountEpoch.current += 1;
+    setSelectedWine(null);
+    setMovingWine(null);
+    setSommelierResult(null);
+    setSommelierError('');
+    setShowAddModal(false);
+    setShowScannerModal(false);
+    setShowWallConfig(false);
+    setWebSearchGrounding(null);
+    setAddSlotTarget(null);
+    setIsScanning(false);
+    setIsFetchingLabel(false);
+    setIsAskingSommelier(false);
     localStorage.setItem('lgc_active_account', accountId);
-    const key = `lgc_cellar_data_${accountId}`;
     try {
-      const raw = localStorage.getItem(key);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed.walls) setWalls(parsed.walls);
-        if (parsed.wines) {
-          const cleanedWines = parsed.wines.map((w) => {
-            if (w.customLabelUrl && w.customLabelUrl.startsWith('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAggAAALQ')) {
-              return { ...w, customLabelUrl: null };
-            }
-            return w;
-          });
-          setWines(cleanedWines);
-        }
+      const parsed = loadCellar(localStorage, accountId);
+      if (parsed) {
+        setWalls(parsed.walls?.length ? parsed.walls : DEFAULT_WALLS);
+        setSelectedWallId(parsed.walls?.[0]?.id || DEFAULT_WALLS[0].id);
+        if (Array.isArray(parsed.wines)) setWines(parsed.wines);
         if (parsed.history) setHistory(parsed.history);
       } else if (accountId === 'CAVE-DE-PAPA') {
         setWalls(DEFAULT_WALLS);
@@ -1098,7 +1157,12 @@ export default function App() {
       wines: nextWines,
       history: nextHistory
     };
-    localStorage.setItem(`lgc_cellar_data_${accountId}`, JSON.stringify(payload));
+    try {
+      localStorage.setItem(`lgc_cellar_data_${accountId}`, JSON.stringify(payload));
+    } catch {
+      setSyncStatus('Mémoire locale pleine : exportez votre cave avant de fermer cette page.');
+      return;
+    }
 
     if (driveWebhookUrl && driveWebhookUrl.startsWith('https://script.google.com')) {
       try {
@@ -1117,11 +1181,44 @@ export default function App() {
   };
 
   const updateCellar = (nextWalls, nextWines, nextHistory) => {
+    cellarRef.current = { walls: nextWalls, wines: nextWines, history: nextHistory };
     setWalls(nextWalls);
     setWines(nextWines);
     setHistory(nextHistory);
     saveCellarData(nextWalls, nextWines, nextHistory);
   };
+
+  const patchWine = (id, changes, epoch = accountEpoch.current) => {
+    if (epoch !== accountEpoch.current) return;
+    const current = cellarRef.current;
+    const wine = current.wines.find(w => w.id === id);
+    if (!wine) return;
+    const updated = { ...wine, ...changes };
+    updateCellar(current.walls, current.wines.map(w => w.id === id ? updated : w), current.history);
+    setSelectedWine(prev => prev?.id === id ? updated : prev);
+  };
+
+  const configureWall = (id, field, value) => {
+    try {
+      const next = field === 'name' ? walls.map(w => w.id === id ? { ...w, name: value } : w) : resizeWall(walls, wines, id, field, Number(value));
+      updateCellar(next, wines, history);
+      setWallError('');
+    } catch (error) { setWallError(error.message); }
+  };
+
+  const confirmRemoveWall = () => {
+    try {
+      const next = removeWall(walls, wines, deletingWallId, destinationWallId);
+      updateCellar(next.walls, next.wines, history);
+      if (selectedWallId === deletingWallId) setSelectedWallId(destinationWallId || next.walls[0].id);
+      setAddSlotTarget(null);
+      setMovingWine(null);
+      setDeletingWallId(null);
+      setWallError('');
+    } catch (error) { setWallError(error.message); }
+  };
+
+  const gemini = (options) => askGemini({ key: userGeminiKey, model: geminiModel, ...options });
 
   // Statut d'apogée (adapté aux spiritueux)
   const getApogeeInfo = (wine) => {
@@ -1167,89 +1264,31 @@ export default function App() {
   };
 
   // ============================================================================
-  // 1. GÉNÉRATION D'ÉTIQUETTE PAR IA (AVEC ILLUSTRATION IA + GRAVURE HAUTE DÉFINITION)
+  // 1. RECONSTITUTION D’ÉTIQUETTE D’APRÈS LE STYLE DÉCRIT PAR GOOGLE IA
   // ============================================================================
   const handleGenerateAILabel = async (wine) => {
-    if (!wine) return;
+    if (!wine || isFetchingLabel) return;
+    const epoch = accountEpoch.current;
     setIsFetchingLabel(true);
-    setLabelStatusMsg('Création de l’étiquette par l’IA en cours...');
-
+    setLabelStatusMsg('Google analyse le style de cette étiquette...');
     try {
-      let styleInfo = {};
-      const activeKey = userGeminiKey.trim();
-
-      // Si une clé Gemini est configurée, on récupère les détails historiques exacts de l'étiquette
-      if (activeKey) {
-        try {
-          const resp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${activeKey}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                contents: [{
-                  parts: [{
-                    text: `Décris les couleurs officielles de l'étiquette de la bouteille "${wine.name}" (${wine.appellation}, ${wine.region}, ${wine.type}). Réponds uniquement en JSON strict : {"bg":"#FCF8F0","border":"#9A7B3E","subText":"#7A5828","sealColor":"#7A1621","motto":"GRAND VIN DE BORDEAUX","footer":"MIS EN BOUTEILLE AU CHÂTEAU","visualPrompt":"classic French vineyard chateau engraving"}`
-                  }]
-                }]
-              })
-            }
-          );
-          const data = await resp.json();
-          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          const jsonMatch = text.match(/\{[\s\S]*\}/);
-          if (jsonMatch) styleInfo = JSON.parse(jsonMatch[0]);
-        } catch (err) {
-          console.warn('Fallback style local:', err);
-        }
+      const { value } = await gemini({
+        prompt: `Décris le style connu de l'étiquette de cette bouteille : ${JSON.stringify({ name: wine.name, appellation: wine.appellation, vintage: wine.vintage, region: wine.region, type: wine.type })}. Donne des couleurs hexadécimales bg, border, subText, sealColor et les textes motto et footer. Reste sobre si tu ne connais pas cette étiquette. Cette illustration sera une reconstitution, pas une photo officielle.`,
+        schema: LABEL_SCHEMA
+      });
+      const style = {};
+      for (const field of ['bg', 'border', 'subText', 'sealColor']) {
+        if (/^#[0-9a-f]{6}$/i.test(value[field])) style[field] = value[field];
       }
-
-      // Génération d'une illustration IA du domaine (via Pollinations Flux + proxy CORS wsrv.nl)
-      let aiArtworkImg = null;
-      try {
-        const category = getCategoryFromType(wine.type);
-        const promptText = styleInfo.visualPrompt || (
-          category === 'Cidre'
-            ? `vintage French engraving of Normandy apple orchard half-timbered manor ${wine.name}, warm sepia gold ink`
-            : category === 'Alcool'
-            ? `vintage French copper alembic distillery oak barrel crest ${wine.name} ${wine.region}, gold sepia engraving`
-            : `vintage French wine label illustration of Chateau ${wine.name} ${wine.appellation} ${wine.region} vineyard estate, fine sepia engraving`
-        );
-        const seed = Math.floor(Math.random() * 99999);
-        const rawAiUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(promptText)}?width=480&height=300&nologo=true&seed=${seed}`;
-        const proxiedAiUrl = `https://wsrv.nl/?url=${encodeURIComponent(rawAiUrl)}&w=360&h=220&fit=cover&output=jpg`;
-
-        const imgResp = await fetch(proxiedAiUrl);
-        if (imgResp.ok) {
-          const blob = await imgResp.blob();
-          const base64Art = await new Promise((res) => {
-            const reader = new FileReader();
-            reader.onloadend = () => res(reader.result);
-            reader.readAsDataURL(blob);
-          });
-          aiArtworkImg = await new Promise((res, rej) => {
-            const img = new Image();
-            img.onload = () => res(img);
-            img.onerror = rej;
-            img.src = base64Art;
-          });
-        }
-      } catch (artErr) {
-        console.warn('Utilisation de la gravure vectorielle de haute précision :', artErr);
-      }
-
-      const dataUrl = await generateAILabelDataUrl(wine, styleInfo, aiArtworkImg);
-      const updatedWines = wines.map((w) => (w.id === wine.id ? { ...w, customLabelUrl: dataUrl } : w));
-      const updatedSelected = { ...wine, customLabelUrl: dataUrl };
-
-      setSelectedWine(updatedSelected);
-      updateCellar(walls, updatedWines, history);
-      setLabelStatusMsg('✨ Étiquette IA générée et enregistrée sur la bouteille !');
+      for (const field of ['motto', 'footer']) if (typeof value[field] === 'string') style[field] = value[field];
+      const dataUrl = await generateAILabelDataUrl(wine, style);
+      if (epoch !== accountEpoch.current) return;
+      patchWine(wine.id, { customLabelUrl: dataUrl }, epoch);
+      setLabelStatusMsg('Reconstitution créée avec Google IA. Pour une étiquette exacte, choisissez une vraie photo.');
     } catch (error) {
-      console.error(error);
-      setLabelStatusMsg('Erreur lors de la génération.');
+      if (epoch === accountEpoch.current) setLabelStatusMsg(error.message);
     } finally {
-      setIsFetchingLabel(false);
+      if (epoch === accountEpoch.current) setIsFetchingLabel(false);
     }
   };
 
@@ -1257,87 +1296,68 @@ export default function App() {
   // 2. RECHERCHE AUTOMATIQUE DE VRAIES PHOTOS D'ÉTIQUETTES SUR LE WEB
   // ============================================================================
   const handleSearchWebLabels = async (wine) => {
-    if (!wine) return;
+    if (!wine || isFetchingLabel) return;
+    const epoch = accountEpoch.current;
     setIsFetchingLabel(true);
-    setLabelStatusMsg('Recherche de photos réelles sur les bases Web...');
+    setLabelStatusMsg('Recherche de photos réelles de cette bouteille...');
     setWebSearchCandidates([]);
-
+    setWebSearchGrounding(null);
+    const found = [];
+    let googleError = '';
     try {
-      const q = encodeURIComponent(`${wine.name} ${wine.appellation || ''}`.trim());
-      const foundUrls = [];
-
-      // Recherche OpenFoodFacts (riche en vins, cidres et spiritueux français)
-      try {
-        const offResp = await fetch(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${q}&search_simple=1&action=process&json=1&page_size=6`);
-        if (offResp.ok) {
-          const offData = await offResp.json();
-          (offData.products || []).forEach((p) => {
-            if (p.image_front_url) foundUrls.push({ title: p.product_name || wine.name, url: p.image_front_url });
+      if (userGeminiKey.trim()) {
+        try {
+          const { value, grounding } = await gemini({ search: true,
+            prompt: `Recherche avec Google des photos réelles de l'étiquette exacte de cette bouteille : ${JSON.stringify({ name: wine.name, appellation: wine.appellation, vintage: wine.vintage })}. Réponds en JSON {"images":[{"title":"nom et millésime visibles","url":"URL HTTPS directe de l'image","source":"URL HTTPS de la page source"}]}. Ne propose que des URLs d'images réellement trouvées dans les sources, jamais inventées. Si aucune image directe n'est trouvée, renvoie {"images":[]}.`
           });
-        }
-      } catch {
-        // Ignore erreur réseau OFF
+          if (epoch === accountEpoch.current && selectedWineRef.current?.id === wine.id) setWebSearchGrounding(grounding);
+          found.push(...labelCandidates(value));
+        } catch (error) { googleError = error.message; }
       }
-
-      // Recherche Wikimedia Commons (étiquettes de grands crus, cidres, spiritueux)
-      try {
-        const wikiResp = await fetch(
-          `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(wine.name + ' wine OR bottle')}&gsrlimit=6&prop=imageinfo&iiprop=url&format=json&origin=*`
-        );
-        if (wikiResp.ok) {
-          const wikiData = await wikiResp.json();
-          const pages = wikiData?.query?.pages || {};
-          Object.values(pages).forEach((pg) => {
-            const imgUrl = pg?.imageinfo?.[0]?.url;
-            if (imgUrl && /\.(jpg|jpeg|png|webp)$/i.test(imgUrl)) {
-              foundUrls.push({ title: pg.title.replace('File:', ''), url: imgUrl });
-            }
-          });
-        }
-      } catch {
-        // Ignore
+      // Free catalogue: candidates must be checked by the user before applying.
+      if (!found.length) {
+        const q = encodeURIComponent(wine.name);
+        const results = await Promise.allSettled([
+          fetch(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${q}&search_simple=1&action=process&json=1&page_size=6`, { signal: AbortSignal.timeout(12000) }).then(r => r.ok ? r.json() : {}),
+          fetch(`https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${q}&gsrlimit=6&prop=imageinfo&iiprop=url&format=json&origin=*`, { signal: AbortSignal.timeout(12000) }).then(r => r.ok ? r.json() : {})
+        ]);
+        const off = results[0].status === 'fulfilled' ? results[0].value : {};
+        (off.products || []).forEach(p => {
+          if (safeHttpsUrl(p.image_front_url)) found.push({ title: p.product_name || wine.name, url: p.image_front_url, source: `https://world.openfoodfacts.org/product/${encodeURIComponent(p.code || '')}` });
+        });
+        const wiki = results[1].status === 'fulfilled' ? results[1].value : {};
+        Object.values(wiki.query?.pages || {}).forEach(p => {
+          const info = p.imageinfo?.[0];
+          if (safeHttpsUrl(info?.url)) found.push({ title: p.title.replace('File:', ''), url: info.url, source: safeHttpsUrl(info.descriptionurl) || 'https://commons.wikimedia.org/' });
+        });
       }
-
-      if (foundUrls.length > 0) {
-        setWebSearchCandidates(foundUrls.slice(0, 6));
-        // Applique automatiquement la première photo trouvée via le proxy anti-CORS
-        const dataUrl = await fetchImageAsLabelDataUrl(foundUrls[0].url, wine);
-        const updatedWines = wines.map((w) => (w.id === wine.id ? { ...w, customLabelUrl: dataUrl } : w));
-        setSelectedWine({ ...wine, customLabelUrl: dataUrl });
-        updateCellar(walls, updatedWines, history);
-        setLabelStatusMsg(`✅ Vraie photo trouvée ! Cliquez sur une autre miniature ci-dessous si vous souhaitez changer.`);
-      } else {
-        // Si aucune photo directe dans la base libre, génère l'étiquette officielle haute définition
-        const fallbackDataUrl = await generateAILabelDataUrl(wine, {});
-        const updatedWines = wines.map((w) => (w.id === wine.id ? { ...w, customLabelUrl: fallbackDataUrl } : w));
-        setSelectedWine({ ...wine, customLabelUrl: fallbackDataUrl });
-        updateCellar(walls, updatedWines, history);
-        setLabelStatusMsg('Étiquette officielle recréée ! Vous pouvez aussi coller un lien Google Images ci-dessous.');
-      }
-    } catch (e) {
-      console.error(e);
-      setLabelStatusMsg('Collez directement le lien d’une image ci-dessous.');
+      if (epoch !== accountEpoch.current || selectedWineRef.current?.id !== wine.id) return;
+      setWebSearchCandidates([...new Map(found.map(item => [item.url, item])).values()].slice(0, 6));
+      setLabelStatusMsg(found.length ? 'Vérifiez le domaine, la cuvée et le millésime puis cliquez sur la photo à appliquer.' : `${googleError ? googleError + ' ' : ''}Aucune photo vérifiable trouvée. Vous pouvez photographier votre étiquette ou coller une adresse d’image.`);
+    } catch (error) {
+      if (epoch === accountEpoch.current) setLabelStatusMsg(error.message);
     } finally {
-      setIsFetchingLabel(false);
+      if (epoch === accountEpoch.current) setIsFetchingLabel(false);
     }
   };
 
   // Appliquer une URL d'image Web (avec conversion proxy anti-CORS automatique)
   const handleApplyExternalImageUrl = async (urlToApply) => {
-    if (!urlToApply || !selectedWine) return;
+    if (!urlToApply || !selectedWine || isFetchingLabel) return;
+    const targetId = selectedWine.id;
+    const epoch = accountEpoch.current;
     setIsFetchingLabel(true);
     setLabelStatusMsg('Adaptation de la photo Web sur le cylindre de la bouteille...');
     try {
       const dataUrl = await fetchImageAsLabelDataUrl(urlToApply.trim(), selectedWine);
-      const updatedWines = wines.map((w) => (w.id === selectedWine.id ? { ...w, customLabelUrl: dataUrl } : w));
-      setSelectedWine({ ...selectedWine, customLabelUrl: dataUrl });
-      updateCellar(walls, updatedWines, history);
+      if (epoch !== accountEpoch.current) return;
+      patchWine(targetId, { customLabelUrl: dataUrl }, epoch);
       setCustomImageUrlInput('');
       setLabelStatusMsg('✅ Photo Web appliquée et sauvegardée dans votre cave !');
     } catch {
-      setLabelStatusMsg('⚠️ Ce lien ne pointe pas vers une image directe. Faites "Copier l’adresse de l’image" sur Google Images.');
+      if (epoch === accountEpoch.current) setLabelStatusMsg('Ce lien ne permet pas de charger une image. Faites « Copier l’adresse de l’image » ou importez une photo.');
     } finally {
-      setIsFetchingLabel(false);
+      if (epoch === accountEpoch.current) setIsFetchingLabel(false);
     }
   };
 
@@ -1346,141 +1366,79 @@ export default function App() {
   // ============================================================================
   const handleDirectLabelPhotoUpload = async (e, targetWine) => {
     const file = e.target.files?.[0];
-    if (!file || !targetWine) return;
+    e.target.value = '';
+    if (!file || !targetWine || isFetchingLabel) return;
+    const epoch = accountEpoch.current;
     setIsFetchingLabel(true);
-    setLabelStatusMsg('Recadrage de votre photo sur la bouteille...');
+    setLabelStatusMsg('Préparation de votre photo...');
     try {
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const dataUrl = await fetchImageAsLabelDataUrl(reader.result, targetWine);
-        const updatedWines = wines.map((w) => (w.id === targetWine.id ? { ...w, customLabelUrl: dataUrl } : w));
-        setSelectedWine({ ...targetWine, customLabelUrl: dataUrl });
-        updateCellar(walls, updatedWines, history);
-        setLabelStatusMsg('📷 Photo d’étiquette appliquée avec succès !');
-        setIsFetchingLabel(false);
-      };
-      reader.readAsDataURL(file);
-    } catch {
-      setIsFetchingLabel(false);
+      const photo = await readPhoto(file);
+      const dataUrl = await fetchImageAsLabelDataUrl(photo);
+      if (epoch !== accountEpoch.current) return;
+      patchWine(targetWine.id, { customLabelUrl: dataUrl }, epoch);
+      setLabelStatusMsg('Photo d’étiquette enregistrée.');
+    } catch (error) {
+      if (epoch === accountEpoch.current) setLabelStatusMsg(error.message);
+    } finally {
+      if (epoch === accountEpoch.current) setIsFetchingLabel(false);
     }
   };
 
-  // Scanner global pour ajouter une bouteille par photo IA
   const handleScannerFileChange = async (e) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    e.target.value = '';
+    if (!file || isScanning) return;
+    const epoch = accountEpoch.current;
     setIsScanning(true);
-
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      const base64DataUrl = reader.result;
-      setScanPreview(base64DataUrl);
-
-      // Prépare l'étiquette recadrée
-      const croppedLabel = await fetchImageAsLabelDataUrl(base64DataUrl, newWine);
-      const activeKey = userGeminiKey.trim();
-
-      if (activeKey) {
-        try {
-          const base64Clean = base64DataUrl.split(',')[1];
-          const resp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${activeKey}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                contents: [{
-                  parts: [
-                    {
-                      text: `Analyse cette étiquette de bouteille (Vin, Cidre ou Alcool/Spiritueux). Réponds uniquement en JSON strict :
-                      {"category":"Vin ou Cidre ou Alcool","name":"Nom du domaine/château/marque","appellation":"Appellation","region":"Région française","vintage":2020,"type":"Rouge, Blanc, Rosé, Effervescent, Cidre Brut, Calvados, Whisky, Rhum, Cognac...","grapes":"Cépages ou variétés de pommes ou base alcool","peakStart":2025,"peakEnd":2032,"drinkLimit":2035,"webRating":4.4,"tastingAdvice":"Conseil de service","foodPairing":"Plat 1, Plat 2"}`
-                    },
-                    { inlineData: { mimeType: file.type || 'image/jpeg', data: base64Clean } }
-                  ]
-                }]
-              })
-            }
-          );
-          const data = await resp.json();
-          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          const match = text.match(/\{[\s\S]*\}/);
-          if (match) {
-            const parsed = JSON.parse(match[0]);
-            const cat = parsed.category || getCategoryFromType(parsed.type);
-            setNewWine((prev) => ({
-              ...prev,
-              category: cat,
-              name: parsed.name || prev.name,
-              appellation: parsed.appellation || prev.appellation,
-              region: parsed.region || prev.region,
-              vintage: Number(parsed.vintage) || CURRENT_YEAR - 2,
-              type: parsed.type || prev.type,
-              bottleShape: DRINK_CATEGORIES[cat]?.defaultShape || 'bordeaux',
-              grapes: parsed.grapes || prev.grapes,
-              peakStart: Number(parsed.peakStart) || CURRENT_YEAR,
-              peakEnd: Number(parsed.peakEnd) || CURRENT_YEAR + 6,
-              drinkLimit: Number(parsed.drinkLimit) || CURRENT_YEAR + 10,
-              webRating: Number(parsed.webRating) || 4.4,
-              tastingAdvice: parsed.tastingAdvice || prev.tastingAdvice,
-              foodPairing: Array.isArray(parsed.foodPairing) ? parsed.foodPairing.join(', ') : (parsed.foodPairing || ''),
-              customLabelUrl: croppedLabel
-            }));
-          }
-        } catch (err) {
-          console.warn('Scan OCR fallback:', err);
-          setNewWine((prev) => ({ ...prev, customLabelUrl: croppedLabel }));
-        }
-      } else {
-        setNewWine((prev) => ({
-          ...prev,
-          customLabelUrl: croppedLabel
-        }));
-      }
-
-      setIsScanning(false);
+    setScanError('');
+    setScanPreview(null);
+    try {
+      const photo = await readPhoto(file);
+      if (epoch !== accountEpoch.current) return;
+      setScanPreview(photo);
+      const { value } = await gemini({ image: photo, schema: SCAN_SCHEMA,
+        prompt: `Lis cette étiquette de bouteille. Extrais uniquement les informations lisibles : name (domaine, marque et cuvée), appellation, region, vintage (année, ou null si absente), grapes (cépages ou variétés). Classe la boisson avec category et type parmi : ${JSON.stringify(Object.fromEntries(Object.entries(DRINK_CATEGORIES).map(([cat, data]) => [cat, data.types])))}. Pour une image sans étiquette lisible, renvoie name vide. N'invente ni notes, ni millésime, ni dates de garde.`
+      });
+      const fields = scanFields(value, DRINK_CATEGORIES);
+      const label = await fetchImageAsLabelDataUrl(photo);
+      if (epoch !== accountEpoch.current) return;
+      setNewWine({ ...emptyWine(), ...fields, customLabelUrl: label });
+      setAddError('');
       setShowScannerModal(false);
       setShowAddModal(true);
-    };
-    reader.readAsDataURL(file);
+    } catch (error) {
+      if (epoch === accountEpoch.current) setScanError(error.message);
+    } finally {
+      if (epoch === accountEpoch.current) setIsScanning(false);
+    }
   };
 
   // Ajouter la bouteille dans la cave
   const handleAddWineSubmit = async (e) => {
     e.preventDefault();
-    let targetWall = addSlotTarget?.wallId || selectedWallId;
-    let targetRow = addSlotTarget?.row || 1;
-    let targetCol = addSlotTarget?.col || 1;
-
-    if (!addSlotTarget) {
-      const wall = walls.find((w) => w.id === selectedWallId) || walls[0];
-      let found = false;
-      for (let r = 1; r <= wall.rows && !found; r++) {
-        for (let c = 1; c <= wall.cols && !found; c++) {
-          if (!wines.some((w) => w.wallId === wall.id && w.row === r && w.col === c)) {
-            targetWall = wall.id;
-            targetRow = r;
-            targetCol = c;
-            found = true;
-          }
-        }
-      }
+    setAddError('');
+    const epoch = accountEpoch.current;
+    let slot = addSlotTarget;
+    if (slot) {
+      const wall = walls.find(w => w.id === slot.wallId);
+      if (!wall || slot.row > wall.rows || slot.col > wall.cols || wines.some(w => w.wallId === slot.wallId && w.row === slot.row && w.col === slot.col)) slot = null;
     }
+    slot ||= findFreeSlot(walls, wines, selectedWallId);
+    if (!slot) { setAddError('Votre cave est pleine. Ajoutez un mur ou agrandissez un mur existant.'); return; }
 
     const created = {
-      id: `w_${Date.now()}`,
+      id: `w_${crypto.randomUUID()}`,
       ...newWine,
-      vintage: Number(newWine.vintage) || CURRENT_YEAR,
+      vintage: newWine.vintage === '' ? null : Number(newWine.vintage),
       peakStart: Number(newWine.peakStart) || CURRENT_YEAR,
       peakEnd: Number(newWine.peakEnd) || CURRENT_YEAR + 5,
       drinkLimit: Number(newWine.drinkLimit) || CURRENT_YEAR + 8,
-      webRating: Number(newWine.webRating) || 4.3,
+      webRating: newWine.webRating,
       webUrl: newWine.webUrl || `https://www.vivino.com/search/wines?q=${encodeURIComponent(newWine.name + ' ' + newWine.vintage)}`,
       foodPairing: typeof newWine.foodPairing === 'string'
         ? newWine.foodPairing.split(',').map((s) => s.trim()).filter(Boolean)
         : newWine.foodPairing || ['Gastronomie française'],
-      wallId: targetWall,
-      row: targetRow,
-      col: targetCol
+      ...slot
     };
 
     // Génère automatiquement une belle étiquette si aucune photo n'a été fournie
@@ -1488,8 +1446,14 @@ export default function App() {
       created.customLabelUrl = await generateAILabelDataUrl(created, {});
     }
 
-    const nextWines = [...wines, created];
-    updateCellar(walls, nextWines, history);
+    if (epoch !== accountEpoch.current) return;
+    const current = cellarRef.current;
+    const freeSlot = findFreeSlot(current.walls, current.wines, slot.wallId);
+    if (!freeSlot) { setAddError('Votre cave est pleine. Ajoutez un mur.'); return; }
+    const occupied = current.wines.some(w => w.wallId === slot.wallId && w.row === slot.row && w.col === slot.col);
+    if (occupied) Object.assign(created, freeSlot);
+    updateCellar(current.walls, [...current.wines, created], current.history);
+    setNewWine(emptyWine());
     setShowAddModal(false);
     setAddSlotTarget(null);
   };
@@ -1504,8 +1468,8 @@ export default function App() {
       vintage: wine.vintage,
       type: wine.type,
       drunkDate: new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }),
-      userRating: wine.userRating || 4.5,
-      tastingNotes: wine.userNotes || 'Très belle dégustation.',
+      userRating: wine.userRating ?? null,
+      tastingNotes: wine.userNotes || '',
       guest: 'Cave personnelle'
     };
     const nextWines = wines.filter((w) => w.id !== wine.id);
@@ -1515,36 +1479,35 @@ export default function App() {
   };
 
   // Sommelier IA
-  const handleAskSommelier = (e) => {
-    e.preventDefault();
-    if (!dishInput.trim() || wines.length === 0) return;
+  const handleAskSommelier = async (e, suggestion) => {
+    e?.preventDefault();
+    const dish = (suggestion || dishInput).trim();
+    if (!dish || isAskingSommelier) return;
+    setDishInput(dish);
+    setSommelierResult(null);
+    setSommelierError('');
+    if (!wines.length) { setSommelierError('Ajoutez une bouteille à votre cave pour obtenir un accord.'); return; }
+    const epoch = accountEpoch.current;
     setIsAskingSommelier(true);
-
-    setTimeout(() => {
-      const q = dishInput.toLowerCase();
-      const scored = wines.map((w) => {
-        let score = 0;
-        const pairings = (w.foodPairing || []).join(' ').toLowerCase();
-        const cat = getCategoryFromType(w.type);
-        if (pairings.includes(q) || q.split(' ').some((word) => word.length > 3 && pairings.includes(word))) score += 50;
-        if (/crêpe|galette|tarte|pomme|camembert|normand/i.test(q) && (cat === 'Cidre' || w.region === 'Normandie')) score += 45;
-        if (/digestif|café|cigare|chocolat/i.test(q) && cat === 'Alcool') score += 45;
-        if (/boeuf|agneau|gibier|canard|viande|côte/i.test(q) && w.type === 'Rouge') score += 30;
-        if (/poisson|fruits de mer|homard|saint-jacques|fromage|chèvre/i.test(q) && (w.type === 'Blanc' || w.type === 'Effervescent')) score += 30;
-        if (/apéritif|été|grillade|salade|méditerran/i.test(q) && (w.type === 'Rosé' || w.type === 'Effervescent')) score += 30;
-        const ap = getApogeeInfo(w);
-        if (ap.status === 'peak' || ap.status === 'urgent') score += 15;
-        return { wine: w, score };
-      }).sort((a, b) => b.score - a.score);
-
-      setSommelierResult({
-        dish: dishInput,
-        best: scored[0]?.wine || wines[0],
-        alternative: scored[1]?.wine || null
+    try {
+      const inventory = wines.map(w => ({ id: w.id, name: w.name, vintage: w.vintage, type: w.type, appellation: w.appellation, region: w.region, grapes: w.grapes, foodPairing: w.foodPairing, maturity: getApogeeInfo(w).label }));
+      const { value } = await gemini({ schema: SOMMELIER_SCHEMA,
+        prompt: `Tu es sommelier. Pour cette demande ${JSON.stringify(dish)}, propose la meilleure bouteille de cet inventaire et une alternative pertinente si possible : ${JSON.stringify(inventory)}. Retourne bestWineId et secondWineId (identifiants exacts, jamais inventés), reason (explication précise de l'accord, en tenant compte des ingrédients et de la cuisson) et serviceTip (température, carafage). Si aucun accord n'est idéal, explique la limite honnêtement. Ne recommande aucune bouteille hors de cet inventaire.`
       });
-      setIsAskingSommelier(false);
-    }, 450);
+      if (epoch !== accountEpoch.current) return;
+      setSommelierResult({ dish, ...resolveSommelier(value, cellarRef.current.wines) });
+    } catch (error) {
+      if (epoch === accountEpoch.current) setSommelierError(error.message);
+    } finally {
+      if (epoch === accountEpoch.current) setIsAskingSommelier(false);
+    }
   };
+
+  const liveSommelierResult = sommelierResult && wines.some(w => w.id === sommelierResult.best.id) ? {
+    ...sommelierResult,
+    best: wines.find(w => w.id === sommelierResult.best.id),
+    alternative: wines.find(w => w.id === sommelierResult.alternative?.id) || null
+  } : null;
 
   const activeWall = walls.find((w) => w.id === selectedWallId) || walls[0];
   const filteredWines = useMemo(() => {
@@ -1643,7 +1606,7 @@ export default function App() {
               <Cloud className="w-5 h-5" />
             </button>
             <button
-              onClick={() => setShowScannerModal(true)}
+              onClick={() => { setScanError(''); setScanPreview(null); setShowScannerModal(true); }}
               className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs md:text-sm shadow-lg transition"
             >
               <Camera className="w-4 h-4" />
@@ -1652,6 +1615,8 @@ export default function App() {
             <button
               onClick={() => {
                 setAddSlotTarget(null);
+                setNewWine(emptyWine());
+                setAddError('');
                 setShowAddModal(true);
               }}
               className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-red-900/90 hover:bg-red-800 border border-amber-600/40 text-amber-100 font-semibold text-xs md:text-sm shadow-lg transition"
@@ -1685,7 +1650,7 @@ export default function App() {
                   );
                 })}
                 <button
-                  onClick={() => setShowWallConfig(true)}
+                  onClick={() => { setWallError(''); setDeletingWallId(null); setShowWallConfig(true); }}
                   className="px-3 py-2 rounded-xl text-xs bg-stone-900 hover:bg-stone-800 text-amber-300 border border-amber-800/40 flex items-center gap-1.5"
                 >
                   <Sliders className="w-3.5 h-3.5" />
@@ -1739,7 +1704,8 @@ export default function App() {
                   Array.from({ length: activeWall.cols }).map((__, cIdx) => {
                     const row = rIdx + 1;
                     const col = cIdx + 1;
-                    const bottle = filteredWines.find((w) => w.wallId === activeWall.id && w.row === row && w.col === col);
+                    const bottle = wines.find((w) => w.wallId === activeWall.id && w.row === row && w.col === col);
+                    const matchesFilter = !bottle || filteredWines.some(w => w.id === bottle.id);
                     const apogee = bottle ? getApogeeInfo(bottle) : null;
 
                     return (
@@ -1756,11 +1722,16 @@ export default function App() {
                             setSelectedWine(bottle);
                             setLabelStatusMsg('');
                             setWebSearchCandidates([]);
+                            setWebSearchGrounding(null);
                           } else {
                             setAddSlotTarget({ wallId: activeWall.id, row, col });
+                            setNewWine(emptyWine());
+                            setAddError('');
                             setShowAddModal(true);
                           }
                         }}
+                        style={{ opacity: matchesFilter ? 1 : 0.25 }}
+                        aria-label={bottle ? `${bottle.name}, rangée ${row}, casier ${col}` : `Casier libre, rangée ${row}, colonne ${col}`}
                         className="group relative h-56 rounded-2xl bg-gradient-to-b from-[#1A0F0A] via-[#110906] to-[#24150E] border-2 border-[#472A1B] hover:border-amber-500/80 shadow-inner flex flex-col items-center justify-between p-2.5 cursor-pointer transition-all"
                       >
                         {/* Éclairage spot chaud de cave */}
@@ -1856,17 +1827,18 @@ export default function App() {
               <p className="text-xs md:text-sm text-stone-400">
                 Indiquez votre plat, dessert ou moment (ex: Côte de bœuf, Saint-Jacques, Galette bretonne, Tarte aux pommes, Digestif...) et le Sommelier IA sélectionne la bouteille idéale dans vos casiers.
               </p>
-              <form onSubmit={handleAskSommelier} className="flex gap-3">
+              <form onSubmit={handleAskSommelier} className="flex flex-col sm:flex-row gap-3">
                 <input
                   type="text"
+                  aria-label="Plat ou occasion"
                   value={dishInput}
                   onChange={(e) => setDishInput(e.target.value)}
                   placeholder="Ex: Magret de canard aux figues, Crêpes normandes, Homard grillé..."
-                  className="flex-1 px-4 py-3 rounded-xl bg-stone-950 border border-amber-800/50 text-sm text-stone-100"
+                  className="min-w-0 flex-1 px-4 py-3 rounded-xl bg-stone-950 border border-amber-800/50 text-sm text-stone-100"
                 />
                 <button
                   type="submit"
-                  disabled={isAskingSommelier}
+                  disabled={isAskingSommelier || !dishInput.trim() || !wines.length}
                   className="px-6 py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-sm"
                 >
                   {isAskingSommelier ? 'Analyse...' : 'Trouver l’accord'}
@@ -1874,25 +1846,34 @@ export default function App() {
               </form>
             </div>
 
-            {sommelierResult && sommelierResult.best && (
+            <div className="flex flex-wrap gap-2" aria-label="Suggestions de plats">
+              {['Côte de bœuf', 'Saint-Jacques', 'Galette bretonne', 'Tarte aux pommes', 'Fromages', 'Apéritif'].map(dish => (
+                <button key={dish} disabled={isAskingSommelier} onClick={() => handleAskSommelier(null, dish)} className="px-3 py-2 rounded-xl bg-stone-800 border border-amber-800/50 text-amber-200 text-xs">{dish}</button>
+              ))}
+            </div>
+            {sommelierError && <p role="alert" className="text-sm text-amber-200">{sommelierError}</p>}
+            {!userGeminiKey.trim() && <button onClick={() => { setCloudTab('ai'); setShowCloudModal(true); }} className="text-xs text-amber-400 underline">Configurer Google IA</button>}
+
+            {liveSommelierResult && liveSommelierResult.best && (
               <div className="p-6 rounded-3xl bg-gradient-to-br from-[#23150E] to-[#140C08] border border-amber-600/50 flex flex-col md:flex-row items-center gap-6">
-                <RealisticBottleSVG wine={sommelierResult.best} size="showcase" />
+                <RealisticBottleSVG wine={liveSommelierResult.best} size="showcase" />
                 <div className="space-y-3 flex-1">
                   <div className="text-xs uppercase tracking-wider text-amber-400 font-bold">
-                    Sélection idéale pour « {sommelierResult.dish} »
+                    Sélection idéale pour « {liveSommelierResult.dish} »
                   </div>
                   <h4 className="text-2xl font-serif font-bold text-amber-100">
-                    {sommelierResult.best.name} ({sommelierResult.best.vintage})
+                    {liveSommelierResult.best.name} ({liveSommelierResult.best.vintage || 'Sans millésime'})
                   </h4>
                   <p className="text-sm text-stone-300">
-                    {sommelierResult.best.appellation} • {sommelierResult.best.type}
+                    {liveSommelierResult.best.appellation} • {liveSommelierResult.best.type}
                   </p>
                   <p className="text-xs text-amber-300 bg-amber-950/50 px-3 py-2 rounded-xl border border-amber-800/40">
-                    📍 Emplacement : <strong>{walls.find((w) => w.id === sommelierResult.best.wallId)?.name}</strong> — Rangée {sommelierResult.best.row}, Casier {sommelierResult.best.col}
+                    📍 Emplacement : <strong>{walls.find((w) => w.id === liveSommelierResult.best.wallId)?.name}</strong> — Rangée {liveSommelierResult.best.row}, Casier {liveSommelierResult.best.col}
                   </p>
-                  <p className="text-xs text-stone-400 italic">💡 {sommelierResult.best.tastingAdvice}</p>
+                  <p className="text-sm text-stone-200">{liveSommelierResult.reason}</p>
+                  <p className="text-xs text-stone-400 italic">💡 {liveSommelierResult.serviceTip}</p>
                   <button
-                    onClick={() => setSelectedWine(sommelierResult.best)}
+                    onClick={() => { const current = wines.find(w => w.id === liveSommelierResult.best.id); setSelectedWine(current || null); setLabelStatusMsg(''); setWebSearchCandidates([]); setWebSearchGrounding(null); }}
                     className="px-4 py-2 rounded-xl bg-amber-600 text-stone-950 font-bold text-xs"
                   >
                     Ouvrir la vitrine de la bouteille
@@ -1900,6 +1881,11 @@ export default function App() {
                 </div>
               </div>
             )}
+            {liveSommelierResult?.alternative && wines.some(w => w.id === liveSommelierResult.alternative.id) && <button
+              onClick={() => { setSelectedWine(wines.find(w => w.id === liveSommelierResult.alternative.id)); setLabelStatusMsg(''); setWebSearchCandidates([]); setWebSearchGrounding(null); }}
+              className="w-full text-left p-4 rounded-2xl bg-stone-900 border border-amber-800/50 text-amber-200">
+              Autre accord possible : {liveSommelierResult.alternative.name} ({liveSommelierResult.alternative.vintage || 'Sans millésime'}) — Voir la bouteille
+            </button>}
           </div>
         )}
 
@@ -2150,9 +2136,12 @@ export default function App() {
                     {h.name} ({h.vintage})
                   </h3>
                   <p className="text-xs text-stone-400">{h.appellation} • {h.region} • {h.type}</p>
-                  <p className="text-sm text-stone-200 italic mt-2">« {h.tastingNotes} »</p>
+                  <textarea aria-label={`Notes de dégustation de ${h.name}`} rows="2" value={h.tastingNotes || ''}
+                    onChange={e => updateCellar(walls, wines, history.map(entry => entry.id === h.id ? { ...entry, tastingNotes: e.target.value } : entry))}
+                    className="w-full p-2 mt-2 rounded-lg bg-stone-950 border border-stone-800 text-sm text-stone-200" placeholder="Vos impressions de dégustation..." />
                 </div>
-                <div className="text-amber-400 font-bold text-sm">★ {h.userRating}/5</div>
+                <RatingInput value={h.userRating} label={`Note de dégustation de ${h.name}`}
+                  onChange={value => updateCellar(walls, wines, history.map(entry => entry.id === h.id ? { ...entry, userRating: value } : entry))} />
               </div>
             ))}
           </div>
@@ -2201,7 +2190,7 @@ export default function App() {
                     className="flex flex-col items-center justify-center gap-1 p-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-[11px] shadow transition"
                   >
                     <Sparkles className="w-4 h-4" />
-                    <span>✨ Étiquette IA</span>
+                    <span>Recréer avec Google IA</span>
                   </button>
 
                   <button
@@ -2210,7 +2199,7 @@ export default function App() {
                     className="flex flex-col items-center justify-center gap-1 p-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-200 border border-amber-700/40 font-semibold text-[11px] transition"
                   >
                     <Globe className="w-4 h-4 text-amber-400" />
-                    <span>🌐 Vraie photo Web</span>
+                    <span>Chercher une vraie photo</span>
                   </button>
 
                   <label className="flex flex-col items-center justify-center gap-1 p-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-200 border border-amber-700/40 font-semibold text-[11px] cursor-pointer transition">
@@ -2227,28 +2216,24 @@ export default function App() {
                 </div>
 
                 {labelStatusMsg && (
-                  <div className="text-[11px] text-amber-300 bg-amber-950/60 border border-amber-700/40 rounded-lg px-2.5 py-1.5 text-center">
+                  <div role="status" className="text-[11px] text-amber-300 bg-amber-950/60 border border-amber-700/40 rounded-lg px-2.5 py-1.5 text-center">
                     {labelStatusMsg}
                   </div>
                 )}
 
+                {webSearchGrounding?.searchEntryPoint?.renderedContent && <iframe title="Suggestions Google Search" sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={webSearchGrounding.searchEntryPoint.renderedContent} className="w-full h-28 border-0 rounded-xl bg-white" />}
                 {/* Miniatures trouvées sur le Web */}
                 {webSearchCandidates.length > 0 && (
                   <div className="p-2 rounded-xl bg-stone-950/80 border border-amber-900/40 space-y-1.5">
                     <div className="text-[10px] text-stone-400 font-semibold">Photos trouvées (cliquez pour appliquer) :</div>
                     <div className="grid grid-cols-3 gap-1.5">
                       {webSearchCandidates.map((cand, i) => (
-                        <button
-                          key={i}
-                          onClick={() => handleApplyExternalImageUrl(cand.url)}
-                          className="h-14 rounded-lg overflow-hidden border border-amber-700/40 hover:border-amber-400 bg-stone-900"
-                        >
-                          <img
-                            src={`https://wsrv.nl/?url=${encodeURIComponent(cand.url)}&w=120&h=120&fit=cover`}
-                            alt={cand.title}
-                            className="w-full h-full object-cover"
-                          />
-                        </button>
+                        <div key={i} className="space-y-1">
+                          <button disabled={isFetchingLabel} aria-label={`Appliquer ${cand.title}`} onClick={() => handleApplyExternalImageUrl(cand.url)} className="w-full h-20 rounded-lg overflow-hidden border border-amber-700/40 hover:border-amber-400 bg-stone-900">
+                            <img src={`https://wsrv.nl/?url=${encodeURIComponent(cand.url)}&w=120&h=120&fit=contain`} alt={cand.title} className="w-full h-full object-contain" />
+                          </button>
+                          <a href={cand.source} target="_blank" rel="noreferrer" className="block text-[10px] text-amber-300 underline truncate">{cand.title} — Source</a>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -2300,11 +2285,12 @@ export default function App() {
                       {getCategoryFromType(selectedWine.type)} • {selectedWine.type} • {selectedWine.region}
                     </span>
                     <h3 className="text-2xl font-serif font-bold text-amber-100 mt-0.5">
-                      {selectedWine.name} ({selectedWine.vintage})
+                      {selectedWine.name} ({selectedWine.vintage || 'Sans millésime'})
                     </h3>
                     <p className="text-sm text-stone-400">{selectedWine.appellation}</p>
                   </div>
                   <button
+                    aria-label="Fermer la bouteille"
                     onClick={() => setSelectedWine(null)}
                     className="p-2 rounded-xl bg-stone-900 hover:bg-stone-800 text-stone-400"
                   >
@@ -2324,7 +2310,7 @@ export default function App() {
                     className="inline-flex items-center gap-1.5 text-xs px-3 py-1 rounded-full bg-amber-950/70 border border-amber-600/40 text-amber-300 hover:bg-amber-900/60"
                   >
                     <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                    <span>Note Web : {selectedWine.webRating}/5 (Voir avis)</span>
+                    <span>{selectedWine.webRating == null ? 'Consulter les avis Web' : `Note Web : ${selectedWine.webRating}/5 (Voir avis)`}</span>
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
@@ -2358,15 +2344,13 @@ export default function App() {
                     </div>
                   </div>
                   <div className="p-3 rounded-xl bg-stone-900/50 border border-stone-800">
-                    <span className="text-amber-400 font-semibold block mb-1">Mes notes personnelles ({selectedWine.userRating}/5) :</span>
+                    <span className="text-amber-400 font-semibold block mb-2">Mes notes personnelles :</span>
+                    <RatingInput value={selectedWine.userRating} onChange={value => patchWine(selectedWine.id, { userRating: value })} />
                     <textarea
                       rows="2"
                       value={selectedWine.userNotes || ''}
                       onChange={(e) => {
-                        const val = e.target.value;
-                        const updated = { ...selectedWine, userNotes: val };
-                        setSelectedWine(updated);
-                        updateCellar(walls, wines.map((w) => (w.id === updated.id ? updated : w)), history);
+                        patchWine(selectedWine.id, { userNotes: e.target.value });
                       }}
                       placeholder="Ajouter vos impressions de dégustation..."
                       className="w-full bg-stone-950 border border-stone-800 rounded-lg p-2 text-stone-200 text-xs"
@@ -2411,12 +2395,13 @@ export default function App() {
               <h3 className="text-xl font-serif font-bold text-amber-100">
                 Ajouter un Vin, Cidre ou Spiritueux
               </h3>
-              <button onClick={() => setShowAddModal(false)} className="text-stone-400 hover:text-white">
+              <button aria-label="Fermer l’ajout" onClick={() => setShowAddModal(false)} className="text-stone-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <form onSubmit={handleAddWineSubmit} className="space-y-4 text-xs">
+              {newWine.customLabelUrl && <div className="flex items-center gap-3 p-3 rounded-xl bg-stone-900"><img src={newWine.customLabelUrl} alt="Photo à vérifier" className="w-16 h-20 object-contain" /><p className="text-stone-400">Vérifiez les informations lues sur l’étiquette. Les dates de garde proposées restent à adapter à votre bouteille.</p></div>}
               {/* Sélecteur de Catégorie : Vin / Cidre / Spiritueux */}
               <div>
                 <label className="text-amber-300 font-semibold block mb-1.5">Catégorie de bouteille :</label>
@@ -2453,6 +2438,7 @@ export default function App() {
                   <input
                     required
                     type="text"
+                    aria-label="Nom du domaine"
                     value={newWine.name}
                     onChange={(e) => setNewWine({ ...newWine, name: e.target.value })}
                     placeholder={
@@ -2469,6 +2455,7 @@ export default function App() {
                   <label className="text-stone-400 block mb-1">Appellation / Mention</label>
                   <input
                     type="text"
+                    aria-label="Appellation"
                     value={newWine.appellation}
                     onChange={(e) => setNewWine({ ...newWine, appellation: e.target.value })}
                     placeholder={
@@ -2487,6 +2474,7 @@ export default function App() {
                 <div>
                   <label className="text-stone-400 block mb-1">Type précis</label>
                   <select
+                    aria-label="Type précis"
                     value={newWine.type}
                     onChange={(e) => setNewWine({ ...newWine, type: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl bg-stone-950 border border-amber-900/50 text-stone-100"
@@ -2499,10 +2487,13 @@ export default function App() {
                 <div>
                   <label className="text-stone-400 block mb-1">Région</label>
                   <select
+                    aria-label="Région"
                     value={newWine.region}
                     onChange={(e) => setNewWine({ ...newWine, region: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl bg-stone-950 border border-amber-900/50 text-stone-100"
                   >
+                    <option value="">À préciser</option>
+                    {newWine.region && !WINE_REGIONS_MAP.some(r => r.id === newWine.region) && <option value={newWine.region}>{newWine.region}</option>}
                     {WINE_REGIONS_MAP.map((r) => (
                       <option key={r.id} value={r.id}>{r.id}</option>
                     ))}
@@ -2512,6 +2503,7 @@ export default function App() {
                   <label className="text-stone-400 block mb-1">Millésime / Année</label>
                   <input
                     type="number"
+                    aria-label="Millésime"
                     value={newWine.vintage}
                     onChange={(e) => setNewWine({ ...newWine, vintage: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl bg-stone-950 border border-amber-900/50 text-stone-100"
@@ -2524,6 +2516,7 @@ export default function App() {
                   <label className="text-stone-400 block mb-1">Cépages / Variétés / Élaboration</label>
                   <input
                     type="text"
+                    aria-label="Cépages ou variétés"
                     value={newWine.grapes}
                     onChange={(e) => setNewWine({ ...newWine, grapes: e.target.value })}
                     placeholder={
@@ -2539,13 +2532,15 @@ export default function App() {
                 <div>
                   <label className="text-stone-400 block mb-1">Forme du flacon</label>
                   <select
+                    aria-label="Forme du flacon"
                     value={newWine.bottleShape}
                     onChange={(e) => setNewWine({ ...newWine, bottleShape: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl bg-stone-950 border border-amber-900/50 text-stone-100"
                   >
                     <option value="bordeaux">Bordelaise (Épaules hautes)</option>
                     <option value="burgundy">Bourguignonne / Rhône</option>
-                    <option value="champagne">Champenoise / Cidre Bouché</option>
+                    <option value="champagne">Champenoise</option>
+                    <option value="cider">Cidre bouché / Poiré (Bouchon et muselet)</option>
                     <option value="flute">Flûte (Alsace / Provence)</option>
                     <option value="spirit">Carafe Spiritueux / Calvados / Whisky</option>
                   </select>
@@ -2593,6 +2588,8 @@ export default function App() {
                 />
               </div>
 
+              <RatingInput value={newWine.userRating} onChange={value => setNewWine({ ...newWine, userRating: value })} />
+              {addError && <p role="alert" className="text-amber-200">{addError}</p>}
               <button
                 type="submit"
                 className="w-full py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-sm shadow-lg"
@@ -2610,12 +2607,12 @@ export default function App() {
           <div className="bg-[#18100C] border-2 border-amber-700/50 rounded-3xl max-w-md w-full p-6 space-y-4 text-center">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-serif font-bold text-amber-100">Scanner une bouteille (Vin, Cidre, Alcool)</h3>
-              <button onClick={() => setShowScannerModal(false)} className="text-stone-400">
+              <button aria-label="Fermer le scanner" disabled={isScanning} onClick={() => setShowScannerModal(false)} className="text-stone-400">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <p className="text-xs text-stone-400">
-              Prenez l’étiquette en photo avec votre téléphone : l’application découpe l’étiquette pour la bouteille 3D et pré-remplit la fiche.
+              Photographiez l’étiquette de près, sans reflet. Google IA lit les informations visibles et pré-remplit la fiche, que vous pourrez vérifier avant l’ajout.
             </p>
             <label className="block p-8 rounded-2xl border-2 border-dashed border-amber-600/60 bg-stone-950/70 hover:bg-stone-900 cursor-pointer transition">
               <Camera className="w-10 h-10 text-amber-400 mx-auto mb-2" />
@@ -2627,9 +2624,18 @@ export default function App() {
                 accept="image/*"
                 capture="environment"
                 onChange={handleScannerFileChange}
+                disabled={isScanning}
+                aria-label="Photo à analyser"
                 className="hidden"
               />
             </label>
+            {scanPreview && <img src={scanPreview} alt="Étiquette photographiée" className="max-h-40 mx-auto rounded-xl" />}
+            {scanError && <p role="alert" className="text-sm text-amber-200">{scanError}</p>}
+            {!userGeminiKey.trim() && <button onClick={() => { setCloudTab('ai'); setShowCloudModal(true); }} className="text-amber-400 underline text-xs">Configurer Google IA</button>}
+            {scanPreview && !isScanning && <button onClick={() => {
+              setNewWine({ ...emptyWine(), customLabelUrl: scanPreview });
+              setAddError(''); setShowScannerModal(false); setShowAddModal(true);
+            }} className="text-xs text-amber-300 underline">Garder cette photo et remplir la fiche manuellement</button>}
           </div>
         </div>
       )}
@@ -2637,59 +2643,41 @@ export default function App() {
       {/* MODALE CONFIGURATION DES MURS */}
       {showWallConfig && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#18100C] border-2 border-amber-700/50 rounded-3xl max-w-lg w-full p-6 space-y-4">
+          <div className="bg-[#18100C] border-2 border-amber-700/50 rounded-3xl max-w-xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-serif font-bold text-amber-100">Configurer les murs et casiers</h3>
-              <button onClick={() => setShowWallConfig(false)} className="text-stone-400">
-                <X className="w-5 h-5" />
-              </button>
+              <button aria-label="Fermer la configuration" onClick={() => setShowWallConfig(false)} className="text-stone-400"><X className="w-5 h-5" /></button>
             </div>
             <div className="space-y-3">
-              {walls.map((w, idx) => (
-                <div key={w.id} className="p-3 rounded-xl bg-stone-900 border border-amber-900/30 grid grid-cols-3 gap-2 items-center text-xs">
-                  <input
-                    type="text"
-                    value={w.name}
-                    onChange={(e) => {
-                      const next = [...walls];
-                      next[idx].name = e.target.value;
-                      updateCellar(next, wines, history);
-                    }}
-                    className="px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-amber-100 font-bold"
-                  />
-                  <div>
-                    <label className="text-[10px] text-stone-400 block">Étagères (Lignes)</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="12"
-                      value={w.rows}
-                      onChange={(e) => {
-                        const next = [...walls];
-                        next[idx].rows = Number(e.target.value) || 4;
-                        updateCellar(next, wines, history);
-                      }}
-                      className="w-full px-2 py-1 rounded bg-stone-950 border border-stone-700"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-stone-400 block">Colonnes</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="12"
-                      value={w.cols}
-                      onChange={(e) => {
-                        const next = [...walls];
-                        next[idx].cols = Number(e.target.value) || 5;
-                        updateCellar(next, wines, history);
-                      }}
-                      className="w-full px-2 py-1 rounded bg-stone-950 border border-stone-700"
-                    />
-                  </div>
-                </div>
-              ))}
+              {walls.map(w => <div key={w.id} className="p-3 rounded-xl bg-stone-900 border border-amber-900/30 grid grid-cols-2 gap-3 text-xs">
+                <label className="col-span-2 text-stone-400">Nom du mur
+                  <input aria-label={`Nom du mur ${w.name}`} value={w.name} onChange={e => configureWall(w.id, 'name', e.target.value)} className="block w-full mt-1 px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-amber-100 font-bold" />
+                </label>
+                <label className="text-stone-400">Étagères (Lignes)
+                  <input aria-label={`Lignes de ${w.name}`} type="number" min="1" max="12" value={w.rows} onChange={e => configureWall(w.id, 'rows', e.target.value)} className="block w-full mt-1 px-2 py-1 rounded bg-stone-950 border border-stone-700" />
+                </label>
+                <label className="text-stone-400">Colonnes
+                  <input aria-label={`Colonnes de ${w.name}`} type="number" min="1" max="12" value={w.cols} onChange={e => configureWall(w.id, 'cols', e.target.value)} className="block w-full mt-1 px-2 py-1 rounded bg-stone-950 border border-stone-700" />
+                </label>
+                <span className="text-stone-400">{wines.filter(b => b.wallId === w.id).length} bouteille(s) / {w.rows * w.cols} places</span>
+                <button disabled={walls.length <= 1} onClick={() => { setDeletingWallId(w.id); setDestinationWallId(walls.find(other => other.id !== w.id)?.id || ''); setWallError(''); }} className="text-red-300 text-right disabled:opacity-40">Supprimer {w.name}</button>
+              </div>)}
             </div>
+            {deletingWallId && <div className="p-3 rounded-xl border border-red-900 space-y-3 text-sm">
+              <p>Supprimer « {walls.find(w => w.id === deletingWallId)?.name} » ? Les {wines.filter(w => w.wallId === deletingWallId).length} bouteille(s) seront transférées vers les places libres du mur choisi.</p>
+              <label className="block text-xs text-stone-400">Transférer les bouteilles vers
+                <select aria-label="Mur de destination" value={destinationWallId} onChange={e => setDestinationWallId(e.target.value)} className="block w-full mt-1 bg-stone-950 p-2 rounded-lg">
+                  {walls.filter(w => w.id !== deletingWallId).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                </select>
+              </label>
+              <div className="flex gap-3"><button onClick={confirmRemoveWall} className="px-3 py-2 rounded-lg bg-red-900 text-white">Confirmer la suppression</button><button onClick={() => { setDeletingWallId(null); setWallError(''); }}>Annuler</button></div>
+            </div>}
+            {wallError && <p role="alert" className="text-amber-200 text-xs">{wallError}</p>}
+            <button onClick={() => {
+              const wall = { id: `mur-${crypto.randomUUID()}`, name: `Nouveau mur ${walls.length + 1}`, rows: 4, cols: 5 };
+              updateCellar([...walls, wall], wines, history); setSelectedWallId(wall.id); setWallError('');
+            }} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 text-stone-950 font-bold text-sm"><Plus className="w-4 h-4" />Ajouter un mur</button>
+            {walls.length === 1 && <p className="text-xs text-stone-400">La cave doit conserver au moins un mur.</p>}
           </div>
         </div>
       )}
@@ -2697,10 +2685,10 @@ export default function App() {
       {/* MODALE COMPTES, GOOGLE DRIVE KAVA 20 & CLÉ GEMINI IA */}
       {showCloudModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#18100C] border-2 border-amber-700/50 rounded-3xl max-w-xl w-full p-6 space-y-4">
+          <div className="bg-[#18100C] border-2 border-amber-700/50 rounded-3xl max-w-xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-serif font-bold text-amber-100">Comptes Familiaux, Drive Kava 20 & Clé IA</h3>
-              <button onClick={() => setShowCloudModal(false)} className="text-stone-400">
+              <button aria-label="Fermer les paramètres" onClick={() => setShowCloudModal(false)} className="text-stone-400">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -2722,7 +2710,7 @@ export default function App() {
                 onClick={() => setCloudTab('ai')}
                 className={`px-3 py-1.5 rounded-lg font-bold ${cloudTab === 'ai' ? 'bg-amber-600 text-stone-950' : 'bg-stone-900 text-stone-400'}`}
               >
-                3. Clé API Gemini (Scan IA)
+                3. Google IA
               </button>
             </div>
 
@@ -2788,10 +2776,12 @@ export default function App() {
             {cloudTab === 'ai' && (
               <div className="space-y-3 text-xs">
                 <p className="text-stone-400">
-                  Le générateur d’étiquette IA et la recherche Web fonctionnent immédiatement sans clé. Pour activer en plus la lecture OCR Gemini lors du scan photo sur Render, collez votre clé Google AI Studio :
+                  La lecture des photos, le sommelier et la reconstitution des étiquettes utilisent votre clé Google AI Studio. Elle reste dans ce navigateur. La recherche dans les catalogues publics reste accessible sans clé.
                 </p>
                 <input
                   type="password"
+                  aria-label="Clé Google AI Studio"
+                  autoComplete="off"
                   value={userGeminiKey}
                   onChange={(e) => {
                     setUserGeminiKey(e.target.value);
@@ -2800,6 +2790,14 @@ export default function App() {
                   placeholder="AIzaSy..."
                   className="w-full px-3 py-2 rounded-xl bg-stone-950 border border-amber-800/50 text-stone-100"
                 />
+                <label className="block text-stone-400">Modèle Gemini
+                  <select aria-label="Modèle Gemini" value={geminiModel} onChange={e => { setGeminiModel(e.target.value); localStorage.setItem('lgc_gemini_model', e.target.value); }} className="block w-full mt-1 bg-stone-950 p-2 rounded-xl border border-amber-800/50 text-stone-100">
+                    <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+                    <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</option>
+                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (anciens projets)</option>
+                  </select>
+                </label>
+                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="text-amber-400 underline">Ouvrir Google AI Studio</a>
               </div>
             )}
           </div>
