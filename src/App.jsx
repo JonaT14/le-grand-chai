@@ -6,8 +6,15 @@ import {
   ChevronRight, Utensils, Copy, Check, Key, Globe, RefreshCw
 } from 'lucide-react';
 
-import { askGemini, readGeminiKey, DEFAULT_GEMINI_MODEL, SCAN_SCHEMA, SOMMELIER_SCHEMA, LABEL_SCHEMA, resolveSommelier, labelCandidates, safeHttpsUrl } from './ai.js';
+import { askGemini, readGeminiKey, DEFAULT_GEMINI_MODEL, SCAN_SCHEMA, SOMMELIER_SCHEMA, LABEL_SCHEMA, resolveSommelier, groundedLabelCandidates, LABEL_CHECK_SCHEMA, safeHttpsUrl } from './ai.js';
 import { findFreeSlot, resizeWall, removeWall, loadCellar, scanFields } from './cellar.js';
+
+import { loadAccounts, createLocalCellar, importCellarData } from './accounts.js';
+
+import LabelCropEditor from './LabelCropEditor.jsx';
+import { loadRemoteLabel, normalizeLabelBox, rankLabelCandidates } from './label-images.js';
+
+import { verifiedLabelReferences } from './label-catalogue.js';
 
 const CURRENT_YEAR = new Date().getFullYear();
 
@@ -874,6 +881,10 @@ function RealisticBottleSVG({ wine, size = 'rack' }) {
 
   const hasValidCustomLabel = typeof wine.customLabelUrl === 'string' && (/^data:image\/(jpeg|png|webp);base64,/.test(wine.customLabelUrl) || safeHttpsUrl(wine.customLabelUrl));
 
+  if (typeof wine.customBottleUrl === 'string' && (/^data:image\/(jpeg|png|webp);base64,/.test(wine.customBottleUrl) || safeHttpsUrl(wine.customBottleUrl))) {
+    return <img src={wine.customBottleUrl} alt={`Photo réelle de ${wine.name}`} className={isLarge ? 'w-44 h-96 object-contain rounded-xl' : 'w-20 h-44 object-contain rounded-lg'} />;
+  }
+
   return (
     <svg
       viewBox="0 0 100 260"
@@ -1038,20 +1049,12 @@ function RealisticBottleSVG({ wine, size = 'rack' }) {
 export default function App() {
   const [activeTab, setActiveTab] = useState('cellar');
   const [accountId, setAccountId] = useState(() => localStorage.getItem('lgc_active_account') || 'MA-CAVE-PRINCIPALE');
-  const [accounts, setAccounts] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem('lgc_accounts_list'));
-      return saved && saved.length ? saved : [
-        { id: 'MA-CAVE-PRINCIPALE', name: 'Ma Cave Principale', owner: 'Propriétaire', pin: '' },
-        { id: 'CAVE-DE-PAPA', name: 'Cave de Papa', owner: 'Papa', pin: '' }
-      ];
-    } catch {
-      return [
-        { id: 'MA-CAVE-PRINCIPALE', name: 'Ma Cave Principale', owner: 'Propriétaire', pin: '' },
-        { id: 'CAVE-DE-PAPA', name: 'Cave de Papa', owner: 'Papa', pin: '' }
-      ];
-    }
-  });
+  const [accounts, setAccounts] = useState(() => loadAccounts(localStorage));
+  const [newCellarName, setNewCellarName] = useState('');
+  const [newCellarOwner, setNewCellarOwner] = useState('');
+  const [accountError, setAccountError] = useState('');
+  const [accountMessage, setAccountMessage] = useState('');
+
 
   const [walls, setWalls] = useState(DEFAULT_WALLS);
   const [wines, setWines] = useState(DEFAULT_WINES);
@@ -1084,6 +1087,7 @@ export default function App() {
   const [customImageUrlInput, setCustomImageUrlInput] = useState('');
   const [webSearchCandidates, setWebSearchCandidates] = useState([]);
   const [webSearchGrounding, setWebSearchGrounding] = useState(null);
+  const [labelDraft, setLabelDraft] = useState(null);
 
   // États du Scanner IA
   const [isScanning, setIsScanning] = useState(false);
@@ -1121,6 +1125,7 @@ export default function App() {
     setShowScannerModal(false);
     setShowWallConfig(false);
     setWebSearchGrounding(null);
+    setLabelDraft(null);
     setAddSlotTarget(null);
     setIsScanning(false);
     setIsFetchingLabel(false);
@@ -1218,6 +1223,31 @@ export default function App() {
     } catch (error) { setWallError(error.message); }
   };
 
+  const handleCreateCellar = (e) => {
+    e.preventDefault();
+    try {
+      const created = createLocalCellar(localStorage, accounts, newCellarName, newCellarOwner);
+      setAccounts(created.accounts); setAccountId(created.account.id);
+      setNewCellarName(''); setNewCellarOwner(''); setAccountError('');
+      setAccountMessage(`La cave « ${created.account.name} » a été créée, sans bouteille de démonstration.`);
+    } catch (error) { setAccountError(error.message); }
+  };
+
+  const handleImportCellar = async e => {
+    const file = e.target.files?.[0]; e.target.value = '';
+    if (!file) return;
+    try {
+      if (file.size > 20 * 1024 * 1024) throw new Error('Choisissez une sauvegarde de moins de 20 Mo.');
+      const imported = importCellarData(await file.text());
+      const baseName = imported.name || file.name.replace(/\.json$/i, '') || 'Cave importée';
+      let name = baseName; let index = 2;
+      while (accounts.some(a => a.name.toLocaleLowerCase('fr') === name.toLocaleLowerCase('fr'))) name = `${baseName} (${index++})`;
+      const created = createLocalCellar(localStorage, accounts, name.slice(0, 80), imported.owner, imported.cellar);
+      setAccounts(created.accounts); setAccountId(created.account.id); setAccountError('');
+      setAccountMessage(`La cave « ${created.account.name} » a été importée. Vos autres caves sont conservées.`);
+    } catch (error) { setAccountError(error.message); }
+  };
+
   const gemini = (options) => askGemini({ key: userGeminiKey, model: geminiModel, ...options });
 
   // Statut d'apogée (adapté aux spiritueux)
@@ -1267,7 +1297,7 @@ export default function App() {
   // 1. RECONSTITUTION D’ÉTIQUETTE D’APRÈS LE STYLE DÉCRIT PAR GOOGLE IA
   // ============================================================================
   const handleGenerateAILabel = async (wine) => {
-    if (!wine || isFetchingLabel) return;
+    if (!wine || isFetchingLabel || getCategoryFromType(wine.type) !== 'Vin') return;
     const epoch = accountEpoch.current;
     setIsFetchingLabel(true);
     setLabelStatusMsg('Google analyse le style de cette étiquette...');
@@ -1283,7 +1313,7 @@ export default function App() {
       for (const field of ['motto', 'footer']) if (typeof value[field] === 'string') style[field] = value[field];
       const dataUrl = await generateAILabelDataUrl(wine, style);
       if (epoch !== accountEpoch.current) return;
-      patchWine(wine.id, { customLabelUrl: dataUrl }, epoch);
+      patchWine(wine.id, { customLabelUrl: dataUrl, customBottleUrl: null }, epoch);
       setLabelStatusMsg('Reconstitution créée avec Google IA. Pour une étiquette exacte, choisissez une vraie photo.');
     } catch (error) {
       if (epoch === accountEpoch.current) setLabelStatusMsg(error.message);
@@ -1296,27 +1326,27 @@ export default function App() {
   // 2. RECHERCHE AUTOMATIQUE DE VRAIES PHOTOS D'ÉTIQUETTES SUR LE WEB
   // ============================================================================
   const handleSearchWebLabels = async (wine) => {
-    if (!wine || isFetchingLabel) return;
+    if (!wine || isFetchingLabel || getCategoryFromType(wine.type) !== 'Vin') return;
     const epoch = accountEpoch.current;
     setIsFetchingLabel(true);
     setLabelStatusMsg('Recherche de photos réelles de cette bouteille...');
     setWebSearchCandidates([]);
     setWebSearchGrounding(null);
-    const found = [];
+    const found = [...verifiedLabelReferences(wine)];
     let googleError = '';
     try {
-      if (userGeminiKey.trim()) {
+      if (userGeminiKey.trim() && !found.length) {
         try {
-          const { value, grounding } = await gemini({ search: true,
-            prompt: `Recherche avec Google des photos réelles de l'étiquette exacte de cette bouteille : ${JSON.stringify({ name: wine.name, appellation: wine.appellation, vintage: wine.vintage })}. Réponds en JSON {"images":[{"title":"nom et millésime visibles","url":"URL HTTPS directe de l'image","source":"URL HTTPS de la page source"}]}. Ne propose que des URLs d'images réellement trouvées dans les sources, jamais inventées. Si aucune image directe n'est trouvée, renvoie {"images":[]}.`
+          const { grounding } = await gemini({ imageSearch: true, model: 'gemini-3.1-flash-image',
+            prompt: `Utilise Google Image Search pour trouver des photographies de cette bouteille et de son étiquette exacte : ${JSON.stringify({ name: wine.name, appellation: wine.appellation, vintage: wine.vintage, type: wine.type })}. Le domaine, la cuvée et le millésime doivent correspondre. Privilégie le producteur et ses revendeurs. Les sources de photographies originales sont nécessaires, aucune reconstitution ne sera utilisée.`
           });
           if (epoch === accountEpoch.current && selectedWineRef.current?.id === wine.id) setWebSearchGrounding(grounding);
-          found.push(...labelCandidates(value));
+          found.push(...groundedLabelCandidates(grounding));
         } catch (error) { googleError = error.message; }
       }
       // Free catalogue: candidates must be checked by the user before applying.
       if (!found.length) {
-        const q = encodeURIComponent(wine.name);
+        const q = encodeURIComponent(`${wine.name} ${wine.vintage || ''}`.trim());
         const results = await Promise.allSettled([
           fetch(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${q}&search_simple=1&action=process&json=1&page_size=6`, { signal: AbortSignal.timeout(12000) }).then(r => r.ok ? r.json() : {}),
           fetch(`https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${q}&gsrlimit=6&prop=imageinfo&iiprop=url&format=json&origin=*`, { signal: AbortSignal.timeout(12000) }).then(r => r.ok ? r.json() : {})
@@ -1332,8 +1362,9 @@ export default function App() {
         });
       }
       if (epoch !== accountEpoch.current || selectedWineRef.current?.id !== wine.id) return;
-      setWebSearchCandidates([...new Map(found.map(item => [item.url, item])).values()].slice(0, 6));
-      setLabelStatusMsg(found.length ? 'Vérifiez le domaine, la cuvée et le millésime puis cliquez sur la photo à appliquer.' : `${googleError ? googleError + ' ' : ''}Aucune photo vérifiable trouvée. Vous pouvez photographier votre étiquette ou coller une adresse d’image.`);
+      const ranked = rankLabelCandidates(found, wine);
+      setWebSearchCandidates(ranked);
+      setLabelStatusMsg(ranked.length ? 'Photos trouvées dans les sources : ouvrez le site d’origine ou choisissez « Vérifier et recadrer ».' : `${googleError ? googleError + ' ' : ''}Aucune photo correspondante trouvée. Utilisez Google Images ci-dessous, puis collez l’adresse directe d’une photo ou importez votre étiquette.`);
     } catch (error) {
       if (epoch === accountEpoch.current) setLabelStatusMsg(error.message);
     } finally {
@@ -1342,20 +1373,30 @@ export default function App() {
   };
 
   // Appliquer une URL d'image Web (avec conversion proxy anti-CORS automatique)
-  const handleApplyExternalImageUrl = async (urlToApply) => {
+  const handleApplyExternalImageUrl = async (urlToApply, source = '', useWholeBottle = false) => {
     if (!urlToApply || !selectedWine || isFetchingLabel) return;
-    const targetId = selectedWine.id;
+    const target = selectedWine;
     const epoch = accountEpoch.current;
     setIsFetchingLabel(true);
-    setLabelStatusMsg('Adaptation de la photo Web sur le cylindre de la bouteille...');
+    setLabelStatusMsg('Chargement et vérification de la photo réelle...');
     try {
-      const dataUrl = await fetchImageAsLabelDataUrl(urlToApply.trim(), selectedWine);
-      if (epoch !== accountEpoch.current) return;
-      patchWine(targetId, { customLabelUrl: dataUrl }, epoch);
-      setCustomImageUrlInput('');
-      setLabelStatusMsg('✅ Photo Web appliquée et sauvegardée dans votre cave !');
-    } catch {
-      if (epoch === accountEpoch.current) setLabelStatusMsg('Ce lien ne permet pas de charger une image. Faites « Copier l’adresse de l’image » ou importez une photo.');
+      const dataUrl = await loadRemoteLabel(urlToApply.trim());
+      let crop = null, verification = '', matches = null;
+      if (userGeminiKey.trim() && getCategoryFromType(target.type) === 'Vin') {
+        try {
+          const { value } = await gemini({ image: dataUrl, schema: LABEL_CHECK_SCHEMA,
+            prompt: `Cette image doit représenter l'étiquette de ${JSON.stringify({ name: target.name, appellation: target.appellation, vintage: target.vintage })}. Lis le domaine, la cuvée et le millésime visibles. Retourne matches (true seulement si le domaine et la cuvée correspondent, et aucun millésime différent n'est visible), reason (ce qui est lu et toute incertitude, en français), labelBox ([ymin,xmin,ymax,xmax] de l'étiquette principale, coordonnées de 0 à 1000). Si la photo montre une bouteille entière, cadre uniquement son étiquette de face, pas le col ni le fond. Si aucune étiquette n'est lisible, matches=false et cadre l'image entière. N'invente pas les caractères illisibles.`
+          });
+          crop = normalizeLabelBox(value.labelBox);
+          matches = typeof value.matches === 'boolean' ? value.matches : null;
+          verification = typeof value.reason === 'string' ? value.reason : '';
+        } catch (error) { verification = `La vérification Google n’a pas abouti : ${error.message} Vous pouvez contrôler et recadrer la photo manuellement.`; }
+      } else verification = 'Vérification manuelle : contrôlez le domaine, la cuvée et le millésime sur cette photo.';
+      if (epoch !== accountEpoch.current || selectedWineRef.current?.id !== target.id) return;
+      setLabelDraft({ wineId: target.id, dataUrl, source, crop, verification, matches, useWholeBottle });
+      setLabelStatusMsg('Vérifiez l’aperçu et le recadrage avant de remplacer votre étiquette.');
+    } catch (error) {
+      if (epoch === accountEpoch.current) setLabelStatusMsg(error.message);
     } finally {
       if (epoch === accountEpoch.current) setIsFetchingLabel(false);
     }
@@ -1373,10 +1414,9 @@ export default function App() {
     setLabelStatusMsg('Préparation de votre photo...');
     try {
       const photo = await readPhoto(file);
-      const dataUrl = await fetchImageAsLabelDataUrl(photo);
-      if (epoch !== accountEpoch.current) return;
-      patchWine(targetWine.id, { customLabelUrl: dataUrl }, epoch);
-      setLabelStatusMsg('Photo d’étiquette enregistrée.');
+      if (epoch !== accountEpoch.current || selectedWineRef.current?.id !== targetWine.id) return;
+      setLabelDraft({ wineId: targetWine.id, dataUrl: photo, source: '', verification: 'Photo personnelle : ajustez le cadre autour de l’étiquette, ou choisissez la bouteille entière.', matches: null });
+      setLabelStatusMsg('Vérifiez le recadrage de votre photo.');
     } catch (error) {
       if (epoch === accountEpoch.current) setLabelStatusMsg(error.message);
     } finally {
@@ -1524,12 +1564,10 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0F0A08] text-stone-100 flex flex-col md:flex-row pb-20 md:pb-0">
       {/* BARRE LATÉRALE SUR ORDINATEUR */}
-      <aside className="hidden md:flex md:w-72 bg-[#160F0B] border-r border-amber-900/30 flex-col justify-between p-6 shrink-0">
+      <aside className="hidden md:flex md:w-80 bg-[#160F0B] border-r border-amber-900/30 flex-col justify-between p-6 shrink-0">
         <div>
           <div className="flex items-center gap-3 mb-8">
-            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-600 to-red-900 flex items-center justify-center shadow-lg">
-              <Wine className="w-6 h-6 text-amber-100" />
-            </div>
+            <img src="/images/cave-grand-chai.jpeg" alt="Cave voûtée du Grand Chai" width="88" height="88" className="w-[88px] h-[88px] shrink-0 rounded-2xl object-cover border border-amber-700/50 shadow-lg" />
             <div>
               <h1 className="text-2xl font-serif font-bold text-amber-100 tracking-wide">Le Grand Chai</h1>
               <p className="text-xs text-amber-500/80">Cave à Vin, Cidre & Spiritueux</p>
@@ -1567,7 +1605,7 @@ export default function App() {
         <div className="space-y-3 pt-6 border-t border-amber-900/30">
           <div className="p-3 rounded-xl bg-stone-900/80 border border-amber-900/30">
             <div className="text-[11px] uppercase tracking-wider text-amber-500 font-semibold">Cave Active</div>
-            <div className="text-sm font-bold text-amber-100 truncate mt-0.5">{accountId}</div>
+            <div className="text-sm font-bold text-amber-100 truncate mt-0.5">{accounts.find(a => a.id === accountId)?.name || accountId}</div>
             <div className="text-[11px] text-emerald-400 mt-1 flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
               {syncStatus}
@@ -1587,7 +1625,8 @@ export default function App() {
       <main className="flex-1 flex flex-col min-w-0">
         {/* EN-TÊTE SUPÉRIEUR */}
         <header className="bg-[#160F0B]/95 border-b border-amber-900/30 px-4 md:px-8 py-4 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-20 backdrop-blur-md">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <img src="/images/cave-grand-chai.jpeg" alt="Cave voûtée du Grand Chai" width="88" height="88" className="md:hidden w-[88px] h-[88px] shrink-0 rounded-2xl object-cover border border-amber-700/50 shadow-lg" />
             <h2 className="text-xl md:text-2xl font-serif font-bold text-amber-100">
               {activeTab === 'cellar' && 'Vos Casiers en Chêne Massif'}
               {activeTab === 'apogee' && 'Suivi de l’Apogée & Limites de Buvabilité'}
@@ -2183,8 +2222,8 @@ export default function App() {
             <div className="md:col-span-5 bg-gradient-to-b from-[#25160E] via-[#170D08] to-[#120A06] p-6 flex flex-col items-center justify-between border-b md:border-b-0 md:border-r border-amber-900/40">
               {/* Boutons d'action Étiquette */}
               <div className="w-full space-y-2">
-                <div className="grid grid-cols-3 gap-1.5">
-                  <button
+                <div className={`grid ${getCategoryFromType(selectedWine.type) === 'Vin' ? 'grid-cols-3' : 'grid-cols-1'} gap-1.5`}>
+                  {getCategoryFromType(selectedWine.type) === 'Vin' && <><button
                     onClick={() => handleGenerateAILabel(selectedWine)}
                     disabled={isFetchingLabel}
                     className="flex flex-col items-center justify-center gap-1 p-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-[11px] shadow transition"
@@ -2200,7 +2239,7 @@ export default function App() {
                   >
                     <Globe className="w-4 h-4 text-amber-400" />
                     <span>Chercher une vraie photo</span>
-                  </button>
+                  </button></>}
 
                   <label className="flex flex-col items-center justify-center gap-1 p-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-200 border border-amber-700/40 font-semibold text-[11px] cursor-pointer transition">
                     <Camera className="w-4 h-4 text-amber-400" />
@@ -2229,10 +2268,13 @@ export default function App() {
                     <div className="grid grid-cols-3 gap-1.5">
                       {webSearchCandidates.map((cand, i) => (
                         <div key={i} className="space-y-1">
-                          <button disabled={isFetchingLabel} aria-label={`Appliquer ${cand.title}`} onClick={() => handleApplyExternalImageUrl(cand.url)} className="w-full h-20 rounded-lg overflow-hidden border border-amber-700/40 hover:border-amber-400 bg-stone-900">
-                            <img src={`https://wsrv.nl/?url=${encodeURIComponent(cand.url)}&w=120&h=120&fit=contain`} alt={cand.title} className="w-full h-full object-contain" />
-                          </button>
+                          <a href={cand.source} target="_blank" rel="noreferrer" aria-label={`Voir la source de ${cand.title}`} className="block w-full h-24 rounded-lg overflow-hidden border border-amber-700/40 hover:border-amber-400 bg-stone-900">
+                            <img src={cand.url} alt={cand.title} onError={e => { if (!e.currentTarget.dataset.proxy) { e.currentTarget.dataset.proxy = '1'; e.currentTarget.src = `https://wsrv.nl/?url=${encodeURIComponent(cand.url)}&w=160&fit=inside`; } }} className="w-full h-full object-contain" />
+                          </a>
                           <a href={cand.source} target="_blank" rel="noreferrer" className="block text-[10px] text-amber-300 underline truncate">{cand.title} — Source</a>
+                          <p className="text-[10px] text-stone-400">{cand.vintageStatus}</p>
+                          {cand.note && <p className="text-[10px] text-amber-200">{cand.note}</p>}
+                          <button disabled={isFetchingLabel} aria-label={`Vérifier et recadrer ${cand.title}`} onClick={() => handleApplyExternalImageUrl(cand.url, cand.source, cand.useWholeBottle)} className="w-full p-1.5 rounded-lg bg-amber-900/60 text-amber-200 text-[10px]">Vérifier et recadrer</button>
                         </div>
                       ))}
                     </div>
@@ -2270,7 +2312,7 @@ export default function App() {
                     onClick={() => handleApplyExternalImageUrl(customImageUrlInput)}
                     className="px-3 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-600 text-white text-xs font-bold"
                   >
-                    Placer
+                    Vérifier
                   </button>
                 </div>
               </div>
@@ -2682,6 +2724,11 @@ export default function App() {
         </div>
       )}
 
+      {labelDraft && selectedWine?.id === labelDraft.wineId && <LabelCropEditor key={`${labelDraft.wineId}-${labelDraft.dataUrl.slice(-20)}`} draft={labelDraft} onClose={() => setLabelDraft(null)} onApply={({ dataUrl, wholeBottle }) => {
+        patchWine(labelDraft.wineId, wholeBottle ? { customBottleUrl: dataUrl } : { customLabelUrl: dataUrl, customBottleUrl: null });
+        setLabelDraft(null); setCustomImageUrlInput(''); setLabelStatusMsg('Photo réelle enregistrée sur votre bouteille.');
+      }} />}
+
       {/* MODALE COMPTES, GOOGLE DRIVE KAVA 20 & CLÉ GEMINI IA */}
       {showCloudModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -2716,7 +2763,19 @@ export default function App() {
 
             {cloudTab === 'accounts' && (
               <div className="space-y-3 text-xs">
-                <p className="text-stone-400">Chaque membre dispose de sa propre cave indépendante :</p>
+                <p className="text-stone-400">Créez autant de caves que nécessaire et passez de l’une à l’autre. Pour transmettre une cave à quelqu’un, exportez sa sauvegarde puis importez ce fichier sur son appareil. Chaque copie évolue indépendamment.</p>
+                <form onSubmit={handleCreateCellar} className="p-3 rounded-xl bg-stone-900 border border-amber-900/40 space-y-3">
+                  <h4 className="font-bold text-amber-200">Ajouter une cave</h4>
+                  <label className="block text-stone-400">Nom de la cave
+                    <input aria-label="Nom de la nouvelle cave" required maxLength="80" value={newCellarName} onChange={e => setNewCellarName(e.target.value)} placeholder="Ex. Cave de Marie, Maison de campagne…" className="block w-full mt-1 p-2 rounded-lg bg-stone-950 border border-stone-700 text-stone-100" />
+                  </label>
+                  <label className="block text-stone-400">Propriétaire ou groupe (facultatif)
+                    <input aria-label="Propriétaire de la nouvelle cave" maxLength="80" value={newCellarOwner} onChange={e => setNewCellarOwner(e.target.value)} placeholder="Ex. Marie, Famille…" className="block w-full mt-1 p-2 rounded-lg bg-stone-950 border border-stone-700 text-stone-100" />
+                  </label>
+                  <button type="submit" className="px-4 py-2 rounded-lg bg-amber-600 text-stone-950 font-bold">Créer la cave</button>
+                </form>
+                {accountError && <p role="alert" className="text-red-300">{accountError}</p>}
+                {accountMessage && <p role="status" className="text-emerald-300">{accountMessage}</p>}
                 <div className="grid grid-cols-2 gap-2">
                   {accounts.map((acc) => (
                     <button
@@ -2729,24 +2788,29 @@ export default function App() {
                       }`}
                     >
                       <div className="font-bold">{acc.name}</div>
-                      <div className="text-[10px] text-amber-400">{acc.id}</div>
+                      <div className="text-[10px] text-amber-400">{acc.owner || 'Cave personnelle'}</div>
                     </button>
                   ))}
                 </div>
                 <div className="flex gap-2 pt-2">
                   <button
                     onClick={() => {
-                      const blob = new Blob([JSON.stringify({ walls, wines, history }, null, 2)], { type: 'application/json' });
+                      const blob = new Blob([JSON.stringify({ format: 'le-grand-chai', version: 1, name: accounts.find(a => a.id === accountId)?.name || 'Ma cave', owner: accounts.find(a => a.id === accountId)?.owner || '', cellar: { walls, wines, history } }, null, 2)], { type: 'application/json' });
                       const url = URL.createObjectURL(blob);
                       const a = document.createElement('a');
                       a.href = url;
                       a.download = `Kava20_${accountId}.json`;
                       a.click();
+                      setTimeout(() => URL.revokeObjectURL(url), 1000);
                     }}
                     className="flex-1 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-200 font-semibold flex items-center justify-center gap-1.5"
                   >
                     <Download className="w-4 h-4" /> Télécharger sauvegarde (.json)
                   </button>
+                  <label className="flex-1 p-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-200 text-center font-semibold cursor-pointer">
+                    Importer une cave (.json)
+                    <input type="file" accept=".json,application/json" aria-label="Importer une cave" onChange={handleImportCellar} className="hidden" />
+                  </label>
                 </div>
               </div>
             )}

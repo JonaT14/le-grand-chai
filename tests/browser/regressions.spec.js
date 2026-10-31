@@ -113,27 +113,33 @@ test('scanner quota error is visible and allows manual recovery with the photo',
   await expect(page.getByAltText('Photo à vérifier')).toBeVisible();
 });
 
-test('labels: Google reconstitution and real photo search stay distinct, sources must be chosen', async ({ page }) => {
+test('labels: verified Margaux photo requires preview and confirmation, generated art stays distinct', async ({ page }) => {
   await seed(page); let searches = 0;
   await page.route(api, async route => {
     const body = route.request().postDataJSON();
-    if (body.tools) {
-      searches++;
-      await route.fulfill({ json: jsonReply({ images: [{ title: 'Margaux 2015', url: 'https://example.com/margaux.jpg', source: 'https://example.com/wine' }] }) });
+    if (body.tools) searches++;
+    if (body.generationConfig?.responseSchema?.properties?.matches) {
+      await route.fulfill({ json: jsonReply({ matches: true, reason: 'Château Margaux et 2015 sont lisibles.', labelBox: [400, 200, 700, 800] }) });
     } else await route.fulfill({ json: jsonReply({ bg: '#FCF8F0', border: '#9A7B3E', motto: 'PREMIER GRAND CRU CLASSÉ', footer: 'MIS EN BOUTEILLE AU CHÂTEAU' }) });
   });
-  await page.route('https://wsrv.nl/**', route => route.fulfill({ contentType: 'image/png', body: photo }));
+  await page.route('https://assets.wine.com/**', route => route.fulfill({ contentType: 'image/png', body: photo }));
   await page.goto('/'); await openMargaux(page);
   await page.getByRole('button', { name: 'Recréer avec Google IA', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Reconstitution créée');
   const before = (await stored(page)).wines.find(w => w.id === 'w1').customLabelUrl;
   await page.getByRole('button', { name: 'Chercher une vraie photo', exact: true }).click();
-  await expect(page.getByRole('link', { name: 'Margaux 2015 — Source' })).toHaveAttribute('href', 'https://example.com/wine');
+  await expect(page.getByRole('link', { name: 'Château Margaux 2015 — bouteille sérigraphiée — Source', exact: true })).toHaveAttribute('href', 'https://www.wine.com/product/chateau-margaux-2015/153459');
   expect((await stored(page)).wines.find(w => w.id === 'w1').customLabelUrl).toBe(before);
-  await page.getByRole('button', { name: 'Appliquer Margaux 2015', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Photo Web appliquée');
-  expect((await stored(page)).wines.find(w => w.id === 'w1').customLabelUrl).not.toBe(before);
-  expect(searches).toBe(1);
+  await page.getByRole('button', { name: 'Vérifier et recadrer Château Margaux 2015 — bouteille sérigraphiée', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Vérifier et recadrer l’étiquette' });
+  await expect(dialog).toBeVisible();
+  const apply = dialog.getByRole('button', { name: 'Appliquer cette étiquette' });
+  await expect(apply).toBeDisabled();
+  await dialog.getByRole('checkbox', { name: 'J’ai vérifié que cette étiquette correspond à ma bouteille.' }).check();
+  await apply.click();
+  await expect(page.getByRole('status')).toContainText('Photo réelle enregistrée');
+  expect((await stored(page)).wines.find(w => w.id === 'w1').customBottleUrl).toContain('data:image/jpeg;base64,');
+  expect(searches).toBe(0);
 });
 
 test('full cellar refuses new bottles instead of stacking them in an occupied slot', async ({ page }) => {
@@ -212,7 +218,7 @@ test('a delayed label response cannot overwrite another family cellar', async ({
   await expect.poll(() => Boolean(pending)).toBe(true);
   await page.getByRole('button', { name: 'Fermer la bouteille' }).click();
   await page.getByRole('button', { name: 'Comptes, Drive Kava 20 & Clé IA', exact: true }).click();
-  await page.getByRole('button', { name: /Cave de Papa CAVE-DE-PAPA/ }).click();
+  await page.getByRole('button', { name: /Cave de Papa Papa/ }).click();
   await page.getByRole('button', { name: 'Fermer les paramètres' }).click();
   await pending.fulfill({ json: jsonReply({ bg: '#FCF8F0', border: '#9A7B3E', motto: 'GRAND VIN' }) });
   await expect(page.getByRole('status')).toHaveCount(0);

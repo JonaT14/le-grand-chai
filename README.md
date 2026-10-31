@@ -25,10 +25,27 @@ La clé précédemment enregistrée sous `kava20_gemini_key` reste reconnue. Ell
 
 - **Scanner** : photographie → réduction de taille / conversion JPEG → lecture Gemini → fiche à vérifier. Les informations illisibles restent vides. En cas d'erreur, l'utilisateur peut réessayer ou conserver la photo et saisir les informations manuellement. Les dates de garde du formulaire sont des valeurs à adapter, pas des informations lues sur l'étiquette.
 - **Sommelier IA** : suggestions de plats ou recherche libre → analyse Google de l'inventaire → explication, service et alternative cliquable. Les identifiants de bouteilles absentes de la cave sont refusés. Aucun résultat local simulant une réponse IA n'est affiché.
-- **Recréer avec Google IA** : Google décrit le style connu, puis une illustration est dessinée localement. C'est une reconstitution, pas la photographie d'une étiquette officielle.
-- **Chercher une vraie photo** : recherche Google avec sources lorsque la clé est disponible ; à défaut de résultat, recherche Open Food Facts / Wikimedia Commons. L'utilisateur vérifie la cuvée et le millésime puis sélectionne l'image. Si aucune photo n'est trouvée, l'étiquette existante est conservée. Une photo personnelle ou une adresse directe d'image peut aussi être importée.
+- **Recréer avec Google IA** (vins uniquement) : Google décrit le style connu, puis une illustration est dessinée localement. C'est une reconstitution, pas la photographie d'une étiquette officielle.
+- **Chercher une vraie photo** (vins uniquement) : les adresses proviennent des sources réellement retournées par Google Image Search, pas d’un texte JSON généré. La recherche utilise `gemini-3.1-flash-image` et `googleSearch.searchTypes.imageSearch`. Les images générées éventuelles ne sont jamais utilisées. Les droits et quotas du modèle image sont nécessaires. À défaut de résultat, recherche Open Food Facts / Wikimedia Commons avec filtrage du nom et du millésime. Les photos renvoient directement à leur page source ; un bouton séparé ouvre la vérification et le recadrage.
+- **Vérifier et recadrer** : lecture visuelle par Gemini, comparaison du domaine, de la cuvée et de l’année, proposition de cadre autour de l’étiquette, ajustement manuel et confirmation avant application. En cas de doute ou d’échec Google, la photo peut être vérifiée manuellement. Un mode « bouteille entière » conserve les sérigraphies et les formes particulières. Les photographies sont chargées directement quand le site autorise leur lecture, puis via wsrv.nl en secours.
+- **Château Margaux 2015** : référence photographique vérifiée, utilisable sans clé de recherche. Ce millésime porte une sérigraphie sur verre, différente de l’étiquette papier habituelle. La référence ne correspond ni au troisième vin « Margaux du Château Margaux » ni aux autres millésimes. [Photo et fiche source](https://www.wine.com/product/chateau-margaux-2015/153459), [description du producteur](https://chateau-margaux.com/en/vins/grand-vin-du-chateau-margaux).
+- **Cidres, poirés et spiritueux** : aucun bouton de recherche ou reconstitution IA d’étiquette. Les photos personnelles et le recadrage manuel restent disponibles. Le scanner de fiche et le sommelier gardent leurs fonctions existantes.
 
-La sélection de photos exactes dépend des sources disponibles. Les images distantes passent par le service wsrv.nl pour être affichées puis sauvegardées dans la cave. Une image interdite d'accès ou une page Web à la place d'une image produit un message d'erreur.
+La sélection de photos exactes dépend des sources disponibles. Les photos distantes sont chargées directement lorsque le site l’autorise, avec wsrv.nl comme solution de secours, puis enregistrées dans la cave. Une image interdite d'accès ou une page Web à la place d'une image produit un message d'erreur.
+
+## Caves indépendantes et échange de sauvegardes
+
+Dans **Comptes → Caves Familiales**, « Ajouter une cave » crée une cave vide avec son nom, son propriétaire facultatif et un premier mur. Il n’y a pas de limite arbitraire au nombre de caves ; la capacité de stockage du navigateur reste la limite réelle. Chaque cave a un identifiant distinct et sa propre sauvegarde. Les caves existantes sont conservées.
+
+Pour transmettre une cave à d’autres personnes :
+
+1. Sélectionner la cave à transmettre.
+2. Télécharger sa sauvegarde JSON et transmettre le fichier aux personnes choisies.
+3. Chaque destinataire ouvre le site puis utilise « Importer une cave ».
+
+L’import crée une nouvelle cave sans remplacer les caves existantes. Le nom, les murs, les bouteilles, les photographies et le carnet de dégustation sont inclus. Les anciennes sauvegardes JSON restent acceptées. Les clés Google et les paramètres Drive ne sont jamais inclus dans le fichier. Les copies évoluent indépendamment : **pas de synchronisation automatique entre appareils**, conformément au fonctionnement demandé. Aucun nouveau service d’hébergement n’est requis.
+
+Le logo utilise l’image fournie dans `public/images/cave-grand-chai.jpeg`, à 88 × 88 pixels (contre 44 × 44 auparavant), sur ordinateur et téléphone.
 
 ## Murs, notes et données existantes
 
