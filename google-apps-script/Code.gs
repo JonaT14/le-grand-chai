@@ -8,8 +8,12 @@ var AI_MINUTE_LIMIT = 10;
 function aiJson(value) {
   return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);
 }
+function aiKey() {
+  var value = (PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') || '').trim();
+  return /^AIza[A-Za-z0-9_-]{30,100}$/.test(value) ? value : '';
+}
 function doGet() {
-  return aiJson({ service: AI_SERVICE, version: 1, configured: !!PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') });
+  return aiJson({ service: AI_SERVICE, version: 1, configured: !!aiKey() });
 }
 function aiQuota() {
   var lock = LockService.getScriptLock();
@@ -73,7 +77,7 @@ function doPost(e) {
     input = JSON.parse(raw);
     request = aiRequest(input);
   } catch (_) { return fail(400); }
-  var key = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  var key = aiKey();
   if (!key) return fail(503);
   if (!aiQuota()) return fail(429);
   try {

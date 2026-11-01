@@ -43,8 +43,9 @@ test('proxy quota, malformed envelope and timeout are visible errors', async () 
   await assert.rejects(askGemini({ proxyUrl, prompt: 'Accord', timeoutMs: 5, fetchImpl: async (_, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error(), { name: 'AbortError' })))) }), /trop de temps/);
 });
 
+const testKey = 'AIza' + 'testKeyNeverUseInProduction1234567890';
 const source = readFileSync(new URL('../google-apps-script/Code.gs', import.meta.url), 'utf8');
-function server({ key = 'private-test-key', status = 200, answer, throwUpstream = false } = {}) {
+function server({ key = testKey, status = 200, answer, throwUpstream = false } = {}) {
   const props = new Map(key ? [['GEMINI_API_KEY', key]] : []), calls = [];
   const context = vm.createContext({
     PropertiesService: { getScriptProperties: () => ({ getProperty: name => props.get(name) ?? null, setProperty: (name, value) => props.set(name, value) }) },
@@ -70,8 +71,8 @@ test('the shared service keeps the credential private, strips images/thoughts an
   const result = app.post(request);
   assert.equal(result.status, 200);
   assert.equal(app.calls[0].url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent');
-  assert.equal(app.calls[0].options.headers['x-goog-api-key'], 'private-test-key');
-  assert.ok(!JSON.stringify(result).includes('private-test-key'));
+  assert.equal(app.calls[0].options.headers['x-goog-api-key'], testKey);
+  assert.ok(!JSON.stringify(result).includes(testKey));
   assert.deepEqual(result.data.candidates[0].content.parts, [{ text: '{"ok":true}' }]);
   const forwarded = JSON.parse(app.calls[0].options.payload);
   assert.equal(forwarded.generationConfig.maxOutputTokens, 4096);
@@ -103,10 +104,15 @@ test('global limits cap use across devices and persist between server instances'
   assert.equal(app.post(input()).status, 429);
 });
 test('missing key and provider errors never reveal credentials or raw error details', () => {
-  assert.equal(server({ key: '' }).post(input()).status, 503);
-  for (const options of [{ status: 403 }, { throwUpstream: true }, { answer: { candidates: [{ content: { parts: [{ text: 'private-test-key' }] } }] } }]) {
+  for (const key of ['', '<redacted>', '   ']) {
+    const app = server({ key });
+    assert.equal(app.get().configured, false);
+    assert.equal(app.post(input()).status, 503);
+    assert.equal(app.calls.length, 0);
+  }
+  for (const options of [{ status: 403 }, { throwUpstream: true }, { answer: { candidates: [{ content: { parts: [{ text: testKey }] } }] } }]) {
     const app = server(options);
     const result = app.post(input());
-    assert.ok(!JSON.stringify(result).includes('private-test-key'));
+    assert.ok(!JSON.stringify(result).includes(testKey));
   }
 });
