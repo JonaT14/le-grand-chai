@@ -34,10 +34,13 @@ export async function checkAIService(proxyUrl, { fetchImpl = fetch, signal } = {
   return data;
 }
 
-export async function askGemini({ key, proxyUrl = '', model = DEFAULT_GEMINI_MODEL, prompt, image, schema, search = false, imageSearch = false, fetchImpl = fetch, timeoutMs = 60000 }) {
+export async function askGemini({ key, proxyUrl = '', model = DEFAULT_GEMINI_MODEL, prompt, image, schema, search = false, imageSearch = false, fetchImpl = fetch, timeoutMs = 60000, signal: externalSignal }) {
   if (!proxyUrl && !key?.trim()) throw new Error('Ajoutez votre clé Google AI Studio dans Comptes / Clé IA pour activer cette fonction.');
   if (!/^[a-zA-Z0-9._-]+$/.test(model)) throw new Error('Nom du modèle Gemini invalide.');
   const controller = new AbortController();
+  const cancel = () => controller.abort();
+  externalSignal?.addEventListener('abort', cancel, { once: true });
+  if (externalSignal?.aborted) controller.abort();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const parts = [{ text: prompt }];
@@ -84,11 +87,12 @@ export async function askGemini({ key, proxyUrl = '', model = DEFAULT_GEMINI_MOD
     if (!text.trim()) throw new Error('Google a renvoyé une réponse vide. Réessayez.');
     return { value: parseAIJson(text), grounding: candidate.groundingMetadata || null };
   } catch (error) {
-    if (error.name === 'AbortError') throw new Error('Google met trop de temps à répondre. Réessayez.');
+    if (error.name === 'AbortError') throw new Error(externalSignal?.aborted ? 'Analyse annulée.' : 'Google met trop de temps à répondre. Réessayez.');
     if (error instanceof TypeError) throw new Error('Impossible de joindre Google. Vérifiez votre connexion.');
     throw error;
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', cancel);
   }
 }
 

@@ -35,6 +35,22 @@ L’adresse du service IA est configurée dans `src/ai-config.js` ; `VITE_AI_PRO
 
 La sélection de photos exactes dépend des sources disponibles. Les photos distantes sont chargées directement lorsque le site l’autorise, avec wsrv.nl comme solution de secours, puis enregistrées dans la cave. Une image interdite d'accès ou une page Web à la place d'une image produit un message d'erreur.
 
+## Scanner d’étiquettes, codes-barres et import en masse
+
+Le bouton **Scanner** propose trois modes, pour les vins, cidres / poirés et spiritueux :
+
+- **Étiquette** : photo prise avec le téléphone ou choisie dans la galerie, lecture Google IA puis fiche éditable avec domaine / cuvée, appellation, millésime, région et cépages. Aucun ajout automatique avant validation. Une photo illisible reste récupérable pour une saisie manuelle.
+- **Code-barres** : photo d’un EAN / UPC (8, 12, 13 ou 14 chiffres avec chiffre de contrôle valide), ou saisie de ses chiffres. Le décodage se fait sur l’appareil avec le lecteur natif et ZXing en secours ; un lecteur natif qui ne répond pas laisse la place au secours après 1,5 seconde. Les métadonnées proviennent de l’API v3 Open Food Facts, sans appel Google IA. Le catalogue peut être incomplet ou erroné : la fiche reste à vérifier. **Le code-barres ne garantit pas le millésime : ce champ reste vide**, même si le nom du produit contient une année. Les produits qui ne sont pas identifiés comme des vins, cidres ou spiritueux sont refusés. Un code inconnu et sa photo peuvent être conservés dans une fiche manuelle.
+- **Import en masse** : jusqu’à **20 photos par lot**, étiquettes IA ou codes-barres. L’analyse démarre sur demande, une photo après l’autre, avec au moins 6,5 secondes entre les départs pour respecter les limites des services. Les quotas Google partagés restent applicables. Un échec de clé, de connexion ou de quota arrête les appels suivants et conserve les fiches déjà analysées. L’analyse peut être arrêtée puis reprise sans relire les fiches terminées.
+
+Chaque fiche du lot peut être corrigée, exclue ou retirée avant l’ajout : nom, appellation, millésime, région, catégorie, type et quantité. Les doublons potentiels dans le lot sont signalés. Une référence déjà en cave peut être réapprovisionnée explicitement ; sa photo, sa note personnelle (y compris zéro), ses notes et son casier sont conservés. Par défaut, une nouvelle fiche est créée dans un casier libre.
+
+L’ajout du lot est atomique : toutes les fiches sélectionnées sont validées et leurs emplacements planifiés avant une unique écriture locale. Une cave pleine, un champ invalide ou une mémoire pleine ne peut pas enregistrer un lot partiel. Les fiches restent à l’écran pour corriger la sélection ou réessayer. La fermeture / annulation et un changement de cave empêchent toute réponse tardive de remplir une autre cave.
+
+La photo garde son cadrage complet, sans cadre ni ombrage ajoutés ; elle est réduite à 720 pixels sur son côté le plus long et enregistrée en JPEG pour limiter la mémoire utilisée. Elle accompagne la fiche dans la cave et les sauvegardes. Le code-barres et le lien source catalogue sont également conservés dans les sauvegardes et exports. Les photos de codes-barres ne sont pas envoyées à Open Food Facts : seul le numéro décodé est recherché. Le lecteur ZXing est chargé uniquement quand une photo de code-barres l’exige.
+
+Source catalogue : [Open Food Facts](https://world.openfoodfacts.org), sous [licence ODbL](https://opendatacommons.org/licenses/odbl/1-0/). Le lien vers la référence source est affiché dans les fiches identifiées. Documentation : [API v3](https://openfoodfacts.github.io/openfoodfacts-server/api/) et [lecteur ZXing](https://github.com/zxing-js/browser).
+
 ## Caves indépendantes et échange de sauvegardes
 
 Dans **Comptes → Caves Familiales**, « Ajouter une cave » crée une cave vide avec son nom, son propriétaire facultatif et un premier mur. Il n’y a pas de limite arbitraire au nombre de caves ; la capacité de stockage du navigateur reste la limite réelle. Chaque cave a un identifiant distinct et sa propre sauvegarde. Les caves existantes sont conservées.
