@@ -6,7 +6,8 @@ import {
   ChevronRight, Utensils, Copy, Check, Key, Globe, RefreshCw
 } from 'lucide-react';
 
-import { askGemini, readGeminiKey, DEFAULT_GEMINI_MODEL, SCAN_SCHEMA, SOMMELIER_SCHEMA, LABEL_SCHEMA, resolveSommelier, groundedLabelCandidates, LABEL_CHECK_SCHEMA, safeHttpsUrl } from './ai.js';
+import { askGemini, checkAIService, readGeminiKey, DEFAULT_GEMINI_MODEL, SCAN_SCHEMA, SOMMELIER_SCHEMA, LABEL_SCHEMA, resolveSommelier, groundedLabelCandidates, LABEL_CHECK_SCHEMA, safeHttpsUrl } from './ai.js';
+import { AI_PROXY_URL } from './ai-config.js';
 import { findFreeSlot, resizeWall, removeWall, loadCellar, scanFields } from './cellar.js';
 
 import { loadAccounts, createLocalCellar, importCellarData } from './accounts.js';
@@ -1251,7 +1252,20 @@ export default function App() {
     } catch (error) { setAccountError(error.message); }
   };
 
-  const gemini = (options) => askGemini({ key: userGeminiKey, model: geminiModel, ...options });
+  const aiAvailable = Boolean(AI_PROXY_URL || userGeminiKey.trim());
+  const [aiServiceStatus, setAIServiceStatus] = useState('');
+  const [checkingAIService, setCheckingAIService] = useState(false);
+  const verifyAIService = async () => {
+    setCheckingAIService(true);
+    setAIServiceStatus('Vérification en cours…');
+    try {
+      await checkAIService(AI_PROXY_URL, { signal: AbortSignal.timeout(15000) });
+      setAIServiceStatus('Service IA prêt. Aucune clé à saisir sur cet appareil.');
+    } catch (error) {
+      setAIServiceStatus(error.name === 'TimeoutError' ? 'Le service met trop de temps à répondre. Réessayez.' : error.message);
+    } finally { setCheckingAIService(false); }
+  };
+  const gemini = (options) => askGemini({ key: userGeminiKey, proxyUrl: AI_PROXY_URL, model: geminiModel, ...options });
 
   // Statut d'apogée (adapté aux spiritueux)
   const getApogeeInfo = (wine) => {
@@ -1339,7 +1353,7 @@ export default function App() {
     const found = [...verifiedLabelReferences(wine)];
     let googleError = '';
     try {
-      if (userGeminiKey.trim() && !found.length) {
+      if (aiAvailable && !found.length) {
         try {
           const { grounding } = await gemini({ imageSearch: true, model: 'gemini-3.1-flash-image',
             prompt: `Utilise Google Image Search pour trouver des photographies de cette bouteille et de son étiquette exacte : ${JSON.stringify({ name: wine.name, appellation: wine.appellation, vintage: wine.vintage, type: wine.type })}. Le domaine, la cuvée et le millésime doivent correspondre. Privilégie le producteur et ses revendeurs. Les sources de photographies originales sont nécessaires, aucune reconstitution ne sera utilisée.`
@@ -1386,7 +1400,7 @@ export default function App() {
     try {
       const dataUrl = await loadRemoteLabel(urlToApply.trim());
       let crop = null, verification = '', matches = null;
-      if (userGeminiKey.trim() && getCategoryFromType(target.type) === 'Vin') {
+      if (aiAvailable && getCategoryFromType(target.type) === 'Vin') {
         try {
           const { value } = await gemini({ image: dataUrl, schema: LABEL_CHECK_SCHEMA,
             prompt: `Cette image doit représenter l'étiquette de ${JSON.stringify({ name: target.name, appellation: target.appellation, vintage: target.vintage })}. Lis le domaine, la cuvée et le millésime visibles. Retourne matches (true seulement si le domaine et la cuvée correspondent, et aucun millésime différent n'est visible), reason (ce qui est lu et toute incertitude, en français), labelBox ([ymin,xmin,ymax,xmax] de l'étiquette principale, coordonnées de 0 à 1000). Si la photo montre une bouteille entière, cadre uniquement son étiquette de face, pas le col ni le fond. Si aucune étiquette n'est lisible, matches=false et cadre l'image entière. N'invente pas les caractères illisibles.`
@@ -1902,7 +1916,7 @@ export default function App() {
               ))}
             </div>
             {sommelierError && <p role="alert" className="text-sm text-amber-200">{sommelierError}</p>}
-            {!userGeminiKey.trim() && <button onClick={() => { setCloudTab('ai'); setShowCloudModal(true); }} className="text-xs text-amber-400 underline">Configurer Google IA</button>}
+            {!aiAvailable && <button onClick={() => { setCloudTab('ai'); setShowCloudModal(true); }} className="text-xs text-amber-400 underline">Configurer Google IA</button>}
 
             {liveSommelierResult && liveSommelierResult.best && (
               <div className="p-6 rounded-3xl bg-gradient-to-br from-[#23150E] to-[#140C08] border border-amber-600/50 flex flex-col md:flex-row items-center gap-6">
@@ -2692,7 +2706,7 @@ export default function App() {
             </label>
             {scanPreview && <img src={scanPreview} alt="Étiquette photographiée" className="max-h-40 mx-auto rounded-xl" />}
             {scanError && <p role="alert" className="text-sm text-amber-200">{scanError}</p>}
-            {!userGeminiKey.trim() && <button onClick={() => { setCloudTab('ai'); setShowCloudModal(true); }} className="text-amber-400 underline text-xs">Configurer Google IA</button>}
+            {!aiAvailable && <button onClick={() => { setCloudTab('ai'); setShowCloudModal(true); }} className="text-amber-400 underline text-xs">Configurer Google IA</button>}
             {scanPreview && !isScanning && <button onClick={() => {
               setNewWine({ ...emptyWine(), customLabelUrl: scanPreview });
               setAddError(''); setShowScannerModal(false); setShowAddModal(true);
@@ -2858,21 +2872,31 @@ export default function App() {
 
             {cloudTab === 'ai' && (
               <div className="space-y-3 text-xs">
-                <p className="text-stone-400">
-                  La lecture des photos, le sommelier et la reconstitution des étiquettes utilisent votre clé Google AI Studio. Elle reste dans ce navigateur. La recherche dans les catalogues publics reste accessible sans clé.
-                </p>
-                <input
-                  type="password"
-                  aria-label="Clé Google AI Studio"
-                  autoComplete="off"
-                  value={userGeminiKey}
-                  onChange={(e) => {
-                    setUserGeminiKey(e.target.value);
-                    localStorage.setItem('lgc_gemini_api_key', e.target.value);
-                  }}
-                  placeholder="AIzaSy..."
-                  className="w-full px-3 py-2 rounded-xl bg-stone-950 border border-amber-800/50 text-stone-100"
-                />
+                {AI_PROXY_URL ? (
+                  <div className="space-y-3 rounded-xl border border-amber-800/50 p-3">
+                    <p className="font-semibold text-amber-300">IA configurée pour tous vos appareils</p>
+                    <p className="text-stone-400">La clé Google est conservée côté serveur, dans le compte Google du propriétaire. Le scanner, le sommelier et la recherche d’étiquettes sont prêts à être utilisés, sans recopier de clé sur le téléphone.</p>
+                    <button onClick={verifyAIService} disabled={checkingAIService} className="px-3 py-2 rounded-xl bg-amber-600 text-stone-950 font-bold disabled:opacity-50">Vérifier la connexion IA</button>
+                    {aiServiceStatus && <p role="status">{aiServiceStatus}</p>}
+                    <p className="text-stone-500">La clé peut être remplacée par le propriétaire dans les paramètres du service Google. Les sauvegardes Drive restent configurées séparément.</p>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-stone-400">La lecture des photos, le sommelier et les étiquettes utilisent votre clé Google AI Studio, conservée dans ce navigateur.</p>
+                    <input
+                      type="password"
+                      aria-label="Clé Google AI Studio"
+                      autoComplete="off"
+                      value={userGeminiKey}
+                      onChange={(e) => {
+                        setUserGeminiKey(e.target.value);
+                        localStorage.setItem('lgc_gemini_api_key', e.target.value);
+                      }}
+                      placeholder="AIzaSy..."
+                      className="w-full px-3 py-2 rounded-xl bg-stone-950 border border-amber-800/50 text-stone-100"
+                    />
+                  </>
+                )}
                 <label className="block text-stone-400">Modèle Gemini
                   <select aria-label="Modèle Gemini" value={geminiModel} onChange={e => { setGeminiModel(e.target.value); localStorage.setItem('lgc_gemini_model', e.target.value); }} className="block w-full mt-1 bg-stone-950 p-2 rounded-xl border border-amber-800/50 text-stone-100">
                     <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
@@ -2880,7 +2904,7 @@ export default function App() {
                     <option value="gemini-2.5-flash">Gemini 2.5 Flash (anciens projets)</option>
                   </select>
                 </label>
-                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="text-amber-400 underline">Ouvrir Google AI Studio</a>
+                {!AI_PROXY_URL && <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="text-amber-400 underline">Ouvrir Google AI Studio</a>}
               </div>
             )}
           </div>
