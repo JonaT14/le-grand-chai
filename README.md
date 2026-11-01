@@ -118,3 +118,7 @@ Les tests vérifient les requêtes, le traitement des réponses, les erreurs et 
 ## Aperçu des capteurs par mur
 
 Le haut du plan affiche une température et une hygrométrie **simulées** pour le mur sélectionné dans la cave active. Le nom du mur et de la cave identifient la zone concernée ; changer de mur actualise cet aperçu. Aucun indicateur n'est affiché sous les bouteilles. La case « Afficher la démo des capteurs » masque l'aperçu. Aucun matériel n'est connecté, aucune date de mesure ou alerte réelle n'est fabriquée. Ces valeurs sont associées au mur de la cave et ne sont pas enregistrées dans les stocks, les sauvegardes, le carnet ou les requêtes IA. Le raccordement réel sera défini avec le matériel choisi.
+
+## Présentation des murs en bois
+
+Chaque mur est présenté comme un meuble de cave en chêne clair : corniche portant son nom, montants et étagères continus, fond en bois, séparations droites ou croisées et étiquettes façon caisses de vin. Le veinage est un SVG local, sans chargement de photographie externe. Les séparations décoratives restent liées aux coordonnées du casier et n'affectent ni les emplacements ni la capacité enregistrée. Les noms, formats, stocks, repères et pastilles d'apogée restent visibles. Sur téléphone, le meuble défile horizontalement dans son cadre ; les casiers s'ouvrent aussi au clavier avec Entrée ou Espace.

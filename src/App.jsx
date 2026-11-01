@@ -1,3 +1,4 @@
+import './wood-cellar.css';
 import BottlePropertiesFields from './BottlePropertiesFields.jsx';
 import ServiceGuide from './ServiceGuide.jsx';
 import SensorDemo from './SensorDemo.jsx';
@@ -1786,10 +1787,15 @@ export default function App() {
               <p className="text-stone-400">{filteredWines.length} référence(s) correspondante(s) · les autres casiers sont atténués. Capacité calculée sur le stock, pour une portion par personne ; les contenances inconnues sont exclues du calcul.</p>
             </div>
             {/* Grille des casiers en chêne massif */}
-            <div className="p-5 md:p-8 rounded-3xl bg-gradient-to-b from-[#261710] via-[#1B100B] to-[#140B07] border-4 border-[#3E2417] shadow-2xl overflow-x-auto">
+            <section className="wood-cabinet" aria-label={`Meuble de cave en bois — ${activeWall.name}`}>
+              <header className="wood-cabinet__cornice">
+                <div><p className="wood-cabinet__eyebrow">Le Grand Chai · Cave en bois</p><h3 className="wood-cabinet__name">{activeWall.name}</h3></div>
+                <p className="wood-cabinet__capacity">{activeWall.rows} rangée{activeWall.rows > 1 ? 's' : ''} · {activeWall.cols} colonne{activeWall.cols > 1 ? 's' : ''}</p>
+              </header>
+              <div className="wood-cabinet__scroll">
               <div
-                className="grid gap-4 min-w-[640px]"
-                style={{ gridTemplateColumns: `repeat(${activeWall.cols}, minmax(120px, 1fr))` }}
+                className="wood-cabinet__grid"
+                style={{ gridTemplateColumns: `repeat(${activeWall.cols}, minmax(120px, 1fr))`, minWidth: Math.max(640, activeWall.cols * 140) }}
               >
                 {Array.from({ length: activeWall.rows }).map((_, rIdx) =>
                   Array.from({ length: activeWall.cols }).map((__, cIdx) => {
@@ -1802,6 +1808,9 @@ export default function App() {
                     return (
                       <div
                         key={`${row}-${col}`}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.currentTarget.click(); } }}
                         onClick={() => {
                           if (movingWine && !bottle) {
                             const updated = wines.map((w) =>
@@ -1823,14 +1832,17 @@ export default function App() {
                         }}
                         style={{ opacity: matchesFilter ? 1 : 0.25 }}
                         aria-label={bottle ? `${bottle.name}, rangée ${row}, casier ${col}` : `Casier libre, rangée ${row}, colonne ${col}`}
-                        className="group relative h-64 rounded-2xl bg-gradient-to-b from-[#1A0F0A] via-[#110906] to-[#24150E] border-2 border-[#472A1B] hover:border-amber-500/80 shadow-inner flex flex-col items-center justify-between p-2.5 cursor-pointer transition-all"
+                        className="wood-cabinet__slot"
                       >
-                        {/* Éclairage spot chaud de cave */}
-                        <div className="absolute inset-x-4 top-0 h-16 bg-gradient-to-b from-amber-500/15 to-transparent pointer-events-none rounded-t-xl" />
+                        {(row + col) % 3 !== 0 && <svg className="wood-cabinet__braces" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                          <path d={`M0 100 L100 0 ${(row + col) % 3 === 1 ? 'M0 0 L100 100' : ''}`} fill="none" stroke="#422914" strokeWidth="8" />
+                          <path d={`M0 100 L100 0 ${(row + col) % 3 === 1 ? 'M0 0 L100 100' : ''}`} fill="none" stroke="#c4985d" strokeWidth="5" />
+                          <path d={`M0 100 L100 0 ${(row + col) % 3 === 1 ? 'M0 0 L100 100' : ''}`} fill="none" stroke="#ebc890" strokeWidth=".7" />
+                        </svg>}
 
                         {/* Repère casier + pastille apogée */}
-                        <div className="w-full flex items-center justify-between z-10 px-1">
-                          <span className="text-[10px] font-mono text-amber-500/70">
+                        <div className="wood-cabinet__marker">
+                          <span>
                             R{row}•C{col}
                           </span>
                           {bottle && (
@@ -1844,34 +1856,36 @@ export default function App() {
 
                         {/* Bouteille vue de face ou casier vide */}
                         {bottle ? (
-                          <div className="my-auto transform group-hover:scale-105 transition-transform">
+                          <div className="wood-cabinet__bottle">
                             <RealisticBottleSVG wine={bottle} size="rack" />
                           </div>
                         ) : (
-                          <div className="my-auto flex flex-col items-center justify-center text-stone-600 group-hover:text-amber-500/80 transition">
+                          <div className="wood-cabinet__empty">
                             <Plus className="w-6 h-6 mb-1" />
                             <span className="text-[10px]">Casier libre</span>
                           </div>
                         )}
 
-                        {/* Plaque en laiton gravée */}
+                        {/* Étiquette de casier, comme sur une caisse de vin */}
                         {bottle ? (
-                          <div className="w-full bg-gradient-to-r from-[#8B6B35] via-[#C5A059] to-[#8B6B35] text-stone-950 rounded-md px-2 py-1 text-center shadow-md">
-                            <div className="text-[10px] font-serif font-bold truncate leading-tight">{bottle.name}</div>
-                            <div className="text-[9px] font-semibold opacity-85">
+                          <div className="wood-cabinet__label">
+                            <div className="wood-cabinet__label-name">{bottle.name}</div>
+                            <div className="wood-cabinet__label-detail">
                               {bottle.vintage} • {bottle.type} • {volumeText(bottle)}
                             </div>
-                            <div className="text-[11px] font-bold">{getQuantity(bottle) === 0 ? 'Stock épuisé' : `${getQuantity(bottle)} bouteille${getQuantity(bottle) === 1 ? '' : 's'}`}</div>
+                            <div className="wood-cabinet__label-stock">{getQuantity(bottle) === 0 ? 'Stock épuisé' : `${getQuantity(bottle)} bouteille${getQuantity(bottle) === 1 ? '' : 's'}`}</div>
                           </div>
                         ) : (
-                          <div className="w-full h-6 rounded-md bg-stone-950/40 border border-stone-800/40" />
+                          <div className="wood-cabinet__empty-plate" aria-hidden="true" />
                         )}
                       </div>
                     );
                   })
                 )}
               </div>
-            </div>
+              </div>
+              <div className="wood-cabinet__plinth" aria-hidden="true" />
+            </section>
           </div>
         )}
 

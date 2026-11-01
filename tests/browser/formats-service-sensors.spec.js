@@ -6,7 +6,7 @@ const stored=page=>page.evaluate(key=>JSON.parse(localStorage.getItem(key)),key)
 const open=page=>page.getByLabel('Château Démonstration, rangée 1, casier 1',{exact:true}).click();
 test.beforeEach(async({page})=>{await page.route('https://fonts.googleapis.com/**',r=>r.abort());await page.route('https://fonts.gstatic.com/**',r=>r.abort());});
 test('legacy format can be edited and retained after reload without changing maturity, notes or rating',async({page})=>{
- await seed(page);await page.goto('/');await open(page);
+ await seed(page);await page.goto('/');await page.getByRole('button',{name:'Château Démonstration, rangée 1, casier 1',exact:true}).press('Enter');
  await expect(page.getByLabel('Contenance (cl)',{exact:true})).toHaveValue('75');
  await page.getByLabel('Format du contenant',{exact:true}).selectOption('1500');await page.getByLabel('Bouchage',{exact:true}).selectOption('natural_cork');
  expect((await stored(page)).wines[0]).toMatchObject({volumeMl:1500,closure:'natural_cork',peakEnd:2035,userRating:0,userNotes:'Mes notes'});
@@ -62,6 +62,8 @@ test('phone layout keeps format controls and service guidance inside the screen'
  await page.setViewportSize({width:390,height:844});await seed(page,[{...wine,volumeMl:700}]);await page.goto('/');
  await expect(page.getByLabel('Filtrer par contenance').getByRole('option',{name:'70 cl',exact:true})).toHaveCount(1);
  expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+ await page.locator('.wood-cabinet').scrollIntoViewIfNeeded();
+ await page.screenshot({path:'test-results/cave-bois-mobile.png',fullPage:false});
  await open(page);await page.getByLabel('Format du contenant').selectOption('4500');await page.getByLabel('Bouchage',{exact:true}).selectOption('wax');
  expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
  await page.getByLabel('Date et heure du repas').fill('2026-11-02T20:00');

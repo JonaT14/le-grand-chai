@@ -1,0 +1,133 @@
+/* A continuous timber cabinet: the frame, shelves and uprights share one material. */
+.wood-cabinet {
+  --oak: url('/textures/oak-grain.svg');
+  --shelf-width: 14px;
+  position: relative;
+  padding: 0 16px 15px;
+  border: 1px solid #e2bc7e;
+  border-radius: 5px 5px 2px 2px;
+  background: linear-gradient(90deg, #61411f66, transparent 2%, transparent 98%, #61411f66), var(--oak) #bc8c51;
+  background-size: auto, 640px 240px;
+  box-shadow: 0 22px 40px #0009, 5px 5px 0 #654422, inset 2px 0 2px #f5d9a0;
+  color: #291c12;
+  isolation: isolate;
+}
+.wood-cabinet::after {
+  content: '';
+  position: absolute;
+  inset: auto -4px -14px 3px;
+  height: 13px;
+  border-radius: 0 0 3px 3px;
+  background: linear-gradient(#614323, #352211);
+  box-shadow: 0 9px 16px #0008;
+  z-index: -1;
+}
+.wood-cabinet__cornice {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 -16px;
+  padding: 18px 30px 15px;
+  border-bottom: 5px solid #81552d;
+  background: linear-gradient(#fff2 0 2px, transparent 2px 85%, #6a421e33), var(--oak);
+  box-shadow: 0 5px 8px #24130777, inset 0 -1px #edc17b;
+  z-index: 2;
+}
+.wood-cabinet__cornice::before, .wood-cabinet__cornice::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #78512b;
+  box-shadow: inset 0 1px 2px #412810, 0 1px #f4d7a0;
+}
+.wood-cabinet__cornice::before { left: 11px; }
+.wood-cabinet__cornice::after { right: 11px; }
+.wood-cabinet__eyebrow { font-size: 9px; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; opacity: .75; }
+.wood-cabinet__name { margin: 2px 0 0; font: 700 28px/1.1 Georgia, serif; text-shadow: 0 1px #ffe3ac99; overflow-wrap: anywhere; }
+.wood-cabinet__capacity { font-size: 11px; color: #3f2c19; }
+.wood-cabinet__scroll { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-color: #9a6b38 #53371d; scrollbar-width: thin; }
+.wood-cabinet__grid {
+  display: grid;
+  padding: var(--shelf-width) 0 0 var(--shelf-width);
+  background: linear-gradient(90deg, #895e3033, #f5d29422 35%, #6c461e22), var(--oak);
+  box-shadow: inset 3px 4px 10px #4b2d1599;
+}
+.wood-cabinet__slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  height: 282px;
+  padding: 10px 10px 9px;
+  border-right: var(--shelf-width) solid transparent;
+  border-bottom: var(--shelf-width) solid transparent;
+  border-image: url('/textures/oak-grain.svg') 28 round;
+  background: linear-gradient(180deg, #24160b80, transparent 32%, #2a1a0b30), repeating-linear-gradient(90deg, #ddae6c09 0 38px, #3e281633 39px 40px, #ddae6c09 41px 80px), linear-gradient(100deg, #7d5934, #a17b4c 42%, #72502e);
+  background-clip: padding-box;
+  box-shadow: inset 8px 8px 13px #291808a6, inset -3px -3px 8px #28180788;
+  cursor: pointer;
+  transition: filter .18s, opacity .18s;
+  isolation: isolate;
+}
+.wood-cabinet__slot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--oak);
+  background-size: 180px 480px;
+  opacity: .13;
+  mix-blend-mode: soft-light;
+  z-index: -1;
+}
+.wood-cabinet__slot::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 7px;
+  background: linear-gradient(#d6aa6b77, #74502b);
+  pointer-events: none;
+}
+.wood-cabinet__slot:hover { filter: brightness(1.12); }
+.wood-cabinet__slot:focus-visible { outline: 3px solid #f9d58b; outline-offset: -4px; z-index: 3; }
+.wood-cabinet__marker { position: relative; width: 100%; display: flex; justify-content: space-between; align-items: center; z-index: 2; color: #ffe6b7; text-shadow: 0 1px 2px #000; font-size: 10px; font-family: monospace; }
+.wood-cabinet__bottle { position: relative; margin: auto; z-index: 1; filter: drop-shadow(5px 7px 4px #21100699); transition: transform .18s; }
+.wood-cabinet__slot:hover .wood-cabinet__bottle { transform: translateY(-3px); }
+.wood-cabinet__label {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  padding: 5px 6px 4px;
+  border: 1px solid #6c4829;
+  border-radius: 1px;
+  background: linear-gradient(#eddbb5, #dac295);
+  color: #332417;
+  text-align: center;
+  box-shadow: 0 2px 3px #2e180c55, inset 0 0 0 2px #f7e7c344;
+}
+.wood-cabinet__label-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 700 11px/1.15 Georgia, serif; }
+.wood-cabinet__label-detail { margin-top: 2px; font-size: 9px; line-height: 1.3; }
+.wood-cabinet__label-stock { margin-top: 1px; font-size: 11px; font-weight: 700; }
+.wood-cabinet__braces { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: .9; }
+.wood-cabinet__empty { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; margin: auto; padding: 9px 11px; border: 1px solid #dcb57855; border-radius: 3px; background: #2a1b10b8; color: #f3dfbc; box-shadow: 0 3px 7px #29170744; font-size: 10px; }
+.wood-cabinet__empty-plate { position: relative; width: 44px; height: 13px; border: 1px solid #86613c; background: #b08a54; box-shadow: inset 0 1px #f1d29866; }
+.wood-cabinet__plinth { height: 18px; border-top: 1px solid #e7be7f; background: linear-gradient(#f6dda033, #81532744), var(--oak); box-shadow: inset 0 -3px 3px #6f482c66; margin: 0 -16px -15px; }
+@media (max-width: 640px) {
+  .wood-cabinet { padding-right: 10px; padding-left: 10px; --shelf-width: 11px; }
+  .wood-cabinet__cornice { margin-right: -10px; margin-left: -10px; padding: 15px 21px 12px; }
+  .wood-cabinet__name { font-size: 23px; }
+  .wood-cabinet__slot { height: 278px; padding-right: 7px; padding-left: 7px; }
+  .wood-cabinet__plinth { margin-right: -10px; margin-left: -10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wood-cabinet__slot, .wood-cabinet__bottle { transition: none; }
+  .wood-cabinet__slot:hover .wood-cabinet__bottle { transform: none; }
+}
