@@ -10,7 +10,8 @@ function aiJson(value) {
 }
 function aiKey() {
   var value = (PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') || '').trim();
-  return /^AIza[A-Za-z0-9_-]{30,100}$/.test(value) ? value : '';
+  // Les clés Google sont opaques : ne pas imposer un préfixe historique.
+  return /^[A-Za-z0-9_.-]{20,300}$/.test(value) ? value : '';
 }
 function doGet() {
   return aiJson({ service: AI_SERVICE, version: 1, configured: !!aiKey() });

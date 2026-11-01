@@ -104,7 +104,7 @@ test('global limits cap use across devices and persist between server instances'
   assert.equal(app.post(input()).status, 429);
 });
 test('missing key and provider errors never reveal credentials or raw error details', () => {
-  for (const key of ['', '<redacted>', '   ']) {
+  for (const key of ['', '<redacted>', '   ', 'placeholder']) {
     const app = server({ key });
     assert.equal(app.get().configured, false);
     assert.equal(app.post(input()).status, 503);
@@ -115,4 +115,10 @@ test('missing key and provider errors never reveal credentials or raw error deta
     const result = app.post(input());
     assert.ok(!JSON.stringify(result).includes(testKey));
   }
+});
+
+test('opaque Google credentials do not require a legacy key prefix', () => {
+  const app = server({ key: 'AQ.' + 'syntheticCredentialForTestingOnly123456789' });
+  assert.equal(app.get().configured, true);
+  assert.equal(app.post(input()).status, 200);
 });
