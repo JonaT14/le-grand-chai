@@ -25,12 +25,22 @@ test('capacity filters use the actual stock and selected serving amount',async({
  await page.getByLabel('Nombre de convives',{exact:true}).fill('20');await expect(tile).toHaveCSS('opacity','1');await page.getByLabel('Nombre de convives',{exact:true}).fill('25');await expect(tile).toHaveCSS('opacity','0.25');
  await page.getByLabel('Nombre de convives',{exact:true}).fill('');await page.getByLabel('Filtrer par contenance').selectOption('750');await expect(tile).toHaveCSS('opacity','0.25');await page.getByLabel('Filtrer par contenance').selectOption('1500');await expect(tile).toHaveCSS('opacity','1');
 });
-test('sensors are visible for empty racks and never open the add form or enter backups',async({page})=>{
- await seed(page);await page.goto('/');await expect(page.getByText('Aperçu des capteurs · données simulées',{exact:true})).toBeVisible();
- const emptySensor=page.getByRole('button',{name:/Capteur démo rangée 1 colonne 2/});const label=await emptySensor.getAttribute('aria-label');await emptySensor.click();await expect(page.getByText(/Données simulées · aucun capteur connecté/)).toBeVisible();await expect(page.getByLabel('Nom du domaine',{exact:true})).toHaveCount(0);
- await page.reload();await expect(emptySensor).toHaveAttribute('aria-label',label);
+test('one wall sensor appears above the rack, follows wall selection and never enters bottle data',async({page})=>{
+ await seed(page);await page.goto('/');
+ const sensor=page.getByRole('region',{name:'Conditions simulées de Mur test',exact:true});
+ await expect(sensor).toBeVisible();await expect(page.getByText('Conditions du mur · Démo',{exact:true})).toHaveCount(1);
+ await expect(page.getByRole('button',{name:/Capteur démo rangée/})).toHaveCount(0);
+ const tile=page.getByLabel('Château Démonstration, rangée 1, casier 1',{exact:true});
+ await expect(tile).not.toContainText('°C');await expect(tile).not.toContainText('%');
+ expect((await sensor.boundingBox()).y).toBeLessThan((await tile.boundingBox()).y);
+ const reading=await sensor.innerText();await page.reload();await expect(sensor).toHaveText(reading,{useInnerText:true});
+ await page.getByRole('button',{name:'Configurer murs',exact:true}).click();
+ await page.getByRole('button',{name:/Ajouter un mur/}).click();await page.getByLabel('Fermer la configuration').click();
+ await page.getByRole('button',{name:/Nouveau mur.*0\//}).click();
+ await expect(page.getByRole('region',{name:/Conditions simulées de Nouveau mur/})).toBeVisible();await expect(sensor).toHaveCount(0);
+ await page.getByRole('button',{name:/Mur test \(1\/3\)/}).click();await expect(sensor).toHaveText(reading,{useInnerText:true});
  await open(page);await page.getByLabel('Bouchage',{exact:true}).selectOption('wax');expect(JSON.stringify(await stored(page))).not.toMatch(/temperature|humidity|measuredAt/);
- await page.getByLabel('Fermer la bouteille',{exact:true}).click();await page.getByLabel('Afficher la démo des capteurs',{exact:true}).uncheck();await expect(emptySensor).toHaveCount(0);
+ await page.getByLabel('Fermer la bouteille',{exact:true}).click();await page.getByLabel('Afficher la démo des capteurs',{exact:true}).uncheck();await expect(sensor).toHaveCount(0);
 });
 test('service guide plans a meal, AI refinement is cached, and format edits invalidate it',async({page})=>{
  await seed(page);let calls=0;await page.route('**/generativelanguage.googleapis.com/**',r=>{calls++;return r.fulfill({json:{candidates:[{content:{parts:[{text:JSON.stringify({temperatureMin:16,temperatureMax:17,aerationMinutes:5,uprightHours:12,aeration:'Goûter et surveiller cinq minutes.',sediment:'Si un dépôt est visible, décanter doucement.'})}]}}]}});});

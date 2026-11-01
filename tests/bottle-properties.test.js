@@ -67,7 +67,7 @@ test('meal preparation subtracts aeration and conditional upright time across da
  assert.equal(schedule.opening.toISOString(),'2026-11-01T23:45:00.000Z');assert.equal(schedule.upright.toISOString(),'2026-11-01T12:15:00.000Z');
  assert.equal(serviceSchedule({},''),null);
 });
-test('simulated sensors are deterministic, tied to location and never have a measurement timestamp',()=>{
- const a=demoSensor('cave','a',1,1);assert.deepEqual(a,demoSensor('cave','a',1,1));assert.equal(a.isSimulated,true);assert.equal(a.measuredAt,null);
- assert.notDeepEqual(a,demoSensor('cave','a',1,2));assert.notDeepEqual(a,demoSensor('other','a',1,1));
+test('simulated sensors are tied to the wall and cellar and never have a measurement timestamp',()=>{
+ const a=demoSensor('cave','a');assert.deepEqual(a,demoSensor('cave','a'));assert.equal(a.isSimulated,true);assert.equal(a.measuredAt,null);
+ assert.notDeepEqual(a,demoSensor('cave','b'));assert.notDeepEqual(a,demoSensor('other','a'));
 });

@@ -1775,15 +1775,15 @@ export default function App() {
               </div>
             )}
 
+            <div className="p-4 rounded-xl bg-cyan-950/20 border border-cyan-900/50 text-xs space-y-3">
+              {showSensorDemo && <SensorDemo accountId={accountId} wallId={activeWall.id} wallName={activeWall.name} caveName={accounts.find(a => a.id === accountId)?.name || accountId} />}
+              <label className="flex gap-2 items-center text-stone-400"><input type="checkbox" checked={showSensorDemo} onChange={e=>setShowSensorDemo(e.target.checked)} />Afficher la démo des capteurs</label>
+            </div>
             <div className="flex flex-wrap gap-3 items-end text-xs p-3 rounded-xl bg-stone-900/60 border border-amber-900/30">
               <label>Format à afficher<select aria-label="Filtrer par contenance" value={formatFilter} onChange={e=>setFormatFilter(e.target.value)} className="block bg-stone-950 p-2 rounded-lg mt-1"><option value="all">Tous les formats</option>{[...new Set([375,750,1500,3000,4500,...wines.map(getVolumeMl).filter(ml=>ml !== null)])].sort((a,b)=>a-b).map(ml=><option key={ml} value={ml}>{ml/10} cl</option>)}<option value="unknown">Contenance inconnue</option></select></label>
               <label>Nombre de convives<input aria-label="Nombre de convives" type="number" min="1" step="1" value={guestCount} onChange={e=>setGuestCount(e.target.value)} className="block w-28 bg-stone-950 p-2 rounded-lg mt-1" placeholder="Facultatif" /></label>
               <label>Portion par convive (cl)<input aria-label="Portion par convive (cl)" type="number" min="0.1" step="0.1" value={portionCl} onChange={e=>setPortionCl(e.target.value)} className="block w-28 bg-stone-950 p-2 rounded-lg mt-1" /></label>
               <p className="text-stone-400">{filteredWines.length} référence(s) correspondante(s) · les autres casiers sont atténués. Capacité calculée sur le stock, pour une portion par personne ; les contenances inconnues sont exclues du calcul.</p>
-            </div>
-            <div className="p-3 rounded-xl bg-cyan-950/20 border border-cyan-900/50 text-xs flex flex-wrap gap-2 justify-between items-center">
-              <p><strong className="text-cyan-200">Aperçu des capteurs · données simulées</strong><br /><span className="text-stone-400">Aucun capteur connecté. Une température et une hygrométrie fictives par casier, même vide.</span></p>
-              <label className="flex gap-2 items-center"><input type="checkbox" checked={showSensorDemo} onChange={e=>setShowSensorDemo(e.target.checked)} />Afficher la démo des capteurs</label>
             </div>
             {/* Grille des casiers en chêne massif */}
             <div className="p-5 md:p-8 rounded-3xl bg-gradient-to-b from-[#261710] via-[#1B100B] to-[#140B07] border-4 border-[#3E2417] shadow-2xl overflow-x-auto">
@@ -1823,7 +1823,7 @@ export default function App() {
                         }}
                         style={{ opacity: matchesFilter ? 1 : 0.25 }}
                         aria-label={bottle ? `${bottle.name}, rangée ${row}, casier ${col}` : `Casier libre, rangée ${row}, colonne ${col}`}
-                        className="group relative h-72 rounded-2xl bg-gradient-to-b from-[#1A0F0A] via-[#110906] to-[#24150E] border-2 border-[#472A1B] hover:border-amber-500/80 shadow-inner flex flex-col items-center justify-between p-2.5 cursor-pointer transition-all"
+                        className="group relative h-64 rounded-2xl bg-gradient-to-b from-[#1A0F0A] via-[#110906] to-[#24150E] border-2 border-[#472A1B] hover:border-amber-500/80 shadow-inner flex flex-col items-center justify-between p-2.5 cursor-pointer transition-all"
                       >
                         {/* Éclairage spot chaud de cave */}
                         <div className="absolute inset-x-4 top-0 h-16 bg-gradient-to-b from-amber-500/15 to-transparent pointer-events-none rounded-t-xl" />
@@ -1866,7 +1866,6 @@ export default function App() {
                         ) : (
                           <div className="w-full h-6 rounded-md bg-stone-950/40 border border-stone-800/40" />
                         )}
-                        {showSensorDemo && <SensorDemo key={`${accountId}/${activeWall.id}/${row}/${col}`} accountId={accountId} wallId={activeWall.id} row={row} col={col} />}
                       </div>
                     );
                   })
