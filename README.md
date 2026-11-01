@@ -19,9 +19,11 @@ Les tests de navigateur simulent Google et les images externes. Aucune clé rée
 
 ## Google IA
 
-Dans **Comptes, Drive Kava 20 & Clé IA → Clé API Gemini**, saisir une clé Google AI Studio autorisée pour la Gemini API. Le modèle par défaut est `gemini-3.8-flash`. Les modèles alternatifs peuvent être sélectionnés dans ce même écran ; `gemini-2.5-flash` est réservé aux projets auxquels Google en permet encore l'accès.
+Le site utilise un service Google Apps Script distinct pour partager l’accès à Gemini entre tous les appareils. Dans **Comptes, Drive Kava 20 & Clé IA → 3. Google IA**, le bouton **Vérifier la connexion IA** contrôle sa configuration. Aucune saisie de clé n’est nécessaire sur un nouveau navigateur. Le choix du modèle reste propre à chaque appareil ; le modèle par défaut est `gemini-3.8-flash`.
 
-La clé précédemment enregistrée sous `kava20_gemini_key` reste reconnue. Elle est envoyée à Google dans l'en-tête `x-goog-api-key`, jamais dans l'adresse de la requête. L'application conserve le fonctionnement existant avec une clé personnelle dans le navigateur : aucune clé n'est incluse dans les sources ou le build. Ne pas ajouter de clé partagée à ce dépôt public.
+La clé est une propriété privée `GEMINI_API_KEY` du projet Apps Script, jamais une variable Vite, une valeur du dépôt, un paramètre d’URL ni une réponse au navigateur. Le service possède uniquement l’autorisation `script.external_request` et n’accède pas à Drive. Les sauvegardes existantes et leur adresse sont indépendantes et inchangées. Voir [la procédure de maintenance](google-apps-script/README.md).
+
+L’adresse du service IA est configurée dans `src/ai-config.js` ; `VITE_AI_PROXY_URL` peut la remplacer lors du build. Une valeur explicitement vide conserve le mode historique avec clé locale, y compris la migration de `kava20_gemini_key`. Ce mode permet les tests de régression et les installations autonomes. Une ancienne clé locale n’est jamais transmise au service partagé.
 
 - **Scanner** : photographie → réduction de taille / conversion JPEG → lecture Gemini → fiche à vérifier. Les informations illisibles restent vides. En cas d'erreur, l'utilisateur peut réessayer ou conserver la photo et saisir les informations manuellement. Les dates de garde du formulaire sont des valeurs à adapter, pas des informations lues sur l'étiquette.
 - **Sommelier IA** : suggestions de plats ou recherche libre → analyse Google de l'inventaire → explication, service et alternative cliquable. Les identifiants de bouteilles absentes de la cave sont refusés. Aucun résultat local simulant une réponse IA n'est affiché.
@@ -86,4 +88,4 @@ Références Google consultées le 31 octobre 2026 : [modèles retirés](https:/
 
 ## Limites de validation
 
-Les tests vérifient les requêtes, le traitement des réponses, les erreurs et les parcours d'interface avec des réponses simulées. Une vérification avec une vraie clé Google et une vraie photo reste nécessaire pour confirmer les droits, le quota, la disponibilité du modèle dans le projet et la précision de lecture sur les bouteilles de l'utilisateur. Aucun déploiement ni fusion sur `main` n'est effectué par ces tests.
+Les tests vérifient les requêtes, le traitement des réponses, les erreurs et les parcours d'interface avec des réponses simulées. Le service partagé, une requête Gemini et un accord du sommelier sur la cave de démonstration ont aussi été vérifiés en réel depuis un navigateur sans clé locale. La précision de lecture sur les photographies personnelles et les droits des modèles de recherche d’images restent dépendants du projet Google. Aucun déploiement ni fusion sur `main` n'est effectué par ces tests.

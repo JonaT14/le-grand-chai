@@ -30,7 +30,7 @@ test('Google search uses grounding and does not combine incompatible structured 
   assert.deepEqual(body.tools, [{ googleSearch: {} }]);
   assert.equal(body.generationConfig.responseMimeType, undefined);
 });
-for (const [status, message] of [[400, /refusé/], [403, /refusé/], [404, /modèle/], [429, /quota/], [503, /indisponible/]]) {
+for (const [status, message] of [[400, /refusé/], [402, /facturation/], [403, /refusé/], [404, /modèle/], [429, /quota/], [503, /indisponible/]]) {
   test(`HTTP ${status} is surfaced to the user`, async () => {
     await assert.rejects(askGemini({ key: 'key', prompt: 'test', fetchImpl: async () => ({ ok: false, status, json: async () => ({ error: {} }) }) }), message);
   });
