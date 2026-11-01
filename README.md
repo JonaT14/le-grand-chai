@@ -88,4 +88,4 @@ Références Google consultées le 31 octobre 2026 : [modèles retirés](https:/
 
 ## Limites de validation
 
-Les tests vérifient les requêtes, le traitement des réponses, les erreurs et les parcours d'interface avec des réponses simulées. Une vérification avec une vraie clé Google et une vraie photo reste nécessaire pour confirmer les droits, le quota, la disponibilité du modèle dans le projet et la précision de lecture sur les bouteilles de l'utilisateur. Aucun déploiement ni fusion sur `main` n'est effectué par ces tests.
+Les tests vérifient les requêtes, le traitement des réponses, les erreurs et les parcours d'interface avec des réponses simulées. Le service partagé, une requête Gemini et un accord du sommelier sur la cave de démonstration ont aussi été vérifiés en réel depuis un navigateur sans clé locale. La précision de lecture sur les photographies personnelles et les droits des modèles de recherche d’images restent dépendants du projet Google. Aucun déploiement ni fusion sur `main` n'est effectué par ces tests.

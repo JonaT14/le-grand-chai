@@ -36,9 +36,9 @@ test('a Drive backup or unconfigured script never receives an AI POST', async ()
   await assert.rejects(checkAIService('https://untrusted.example/exec', { fetchImpl: () => assert.fail() }), /invalide/);
 });
 test('proxy quota, malformed envelope and timeout are visible errors', async () => {
-  for (const response of [reply({}, 429), { ok: true, json: async () => ({ status: 200 }) }]) {
+  for (const response of [reply({}, 429), reply({}, 402), { ok: true, json: async () => ({ status: 200 }) }]) {
     let calls = 0;
-    await assert.rejects(askGemini({ proxyUrl, prompt: 'Accord', fetchImpl: async () => ++calls === 1 ? ready() : response }), /quota|invalide/);
+    await assert.rejects(askGemini({ proxyUrl, prompt: 'Accord', fetchImpl: async () => ++calls === 1 ? ready() : response }), /quota|facturation|invalide/);
   }
   await assert.rejects(askGemini({ proxyUrl, prompt: 'Accord', timeoutMs: 5, fetchImpl: async (_, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error(), { name: 'AbortError' })))) }), /trop de temps/);
 });

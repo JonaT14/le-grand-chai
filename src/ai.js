@@ -68,6 +68,7 @@ export async function askGemini({ key, proxyUrl = '', model = DEFAULT_GEMINI_MOD
       const messages = {
         400: 'Google a refusé la requête. Vérifiez la clé et le modèle dans Clé IA.',
         401: 'La clé Google est invalide. Vérifiez-la dans Clé IA.',
+        402: 'Google demande de vérifier la facturation ou le solde du projet AI Studio. Si vous venez de payer, réessayez après son activation.',
         403: 'Accès Google refusé. Vérifiez les autorisations et restrictions de votre clé.',
         404: 'Ce modèle Gemini est indisponible. Choisissez un modèle actif dans Clé IA.',
         429: 'Le quota Google est atteint. Réessayez plus tard ou vérifiez votre quota AI Studio.'
