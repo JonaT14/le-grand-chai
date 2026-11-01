@@ -11,6 +11,7 @@ async function create(page, name) {
   await page.getByRole('button', { name: 'Créer la cave', exact: true }).click();
 }
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('lgc_appearance', JSON.stringify({ theme:'dark', presentation:'premium', landing:'cellar' })));
   await page.route('https://fonts.googleapis.com/**', r => r.abort());
   await page.route('https://fonts.gstatic.com/**', r => r.abort());
 });
@@ -40,6 +41,7 @@ test('create several empty cellars, export and import into another browser witho
   await expect(other.getByRole('status')).toContainText('importée');
   await expect(other.getByRole('button', { name: 'Ma Cave Principale Propriétaire', exact: true })).toBeVisible();
   await other.getByRole('button', { name: 'Fermer les paramètres' }).click();
+  await other.getByRole('button', { name:'Plan de Cave & Casiers', exact:true }).click();
   await other.getByLabel('Vin des amis, rangée 1, casier 1', { exact: true }).click();
   await expect(other.getByLabel('Ma note', { exact: true })).toHaveValue('0');
   await other.getByLabel('Ma note', { exact: true }).selectOption('4');

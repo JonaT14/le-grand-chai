@@ -9,6 +9,7 @@ async function seed(page, wines) {
 async function data(page) { return page.evaluate(account => JSON.parse(localStorage.getItem(`lgc_cellar_data_${account}`)), account); }
 async function settings(page) { await page.getByRole('button', { name: 'Comptes, Drive Kava 20 & Clé IA', exact: true }).click(); }
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('lgc_appearance', JSON.stringify({ theme:'dark', presentation:'premium', landing:'cellar' })));
   await page.route('https://fonts.googleapis.com/**', r => r.abort());
   await page.route('https://fonts.gstatic.com/**', r => r.abort());
 });

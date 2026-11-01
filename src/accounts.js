@@ -1,3 +1,4 @@
+import { validValue, validMovements } from './dashboard.js';
 import { validVolume, CLOSURES } from './bottle-properties.js';
 import { parseQuantity, normalizeInventory } from './inventory.js';
 
@@ -48,10 +49,12 @@ export function importCellarData(raw) {
       if (typeof wine.quantity !== 'number') throw new Error('La quantité de chaque référence doit être un nombre entier.');
       parseQuantity(wine.quantity);
     }
+    if (wine.unitValueCents !== undefined && !validValue(wine.unitValueCents)) throw new Error('La valeur estimée d’une bouteille est invalide.');
     if (wine.volumeMl !== undefined && !validVolume(wine.volumeMl)) throw new Error('La contenance d’une bouteille est invalide.');
     if (wine.closure !== undefined && !Object.hasOwn(CLOSURES, wine.closure)) throw new Error('Le bouchage d’une bouteille est invalide.');
     positions.add(position); ids.add(wine.id);
   }
+  if (data.movements !== undefined && !validMovements(data.movements)) throw new Error('Le journal des entrées et sorties est invalide.');
   if (data.history.some(h => !h || typeof h.id !== 'string' || typeof h.name !== 'string')) throw new Error('Le carnet de dégustation est invalide.');
-  return { name: typeof value.name === 'string' ? value.name : '', owner: typeof value.owner === 'string' ? value.owner.slice(0, 80) : '', cellar: normalizeInventory({ walls: data.walls, wines: data.wines, history: data.history }) };
+  return { name: typeof value.name === 'string' ? value.name : '', owner: typeof value.owner === 'string' ? value.owner.slice(0, 80) : '', cellar: normalizeInventory({ walls: data.walls, wines: data.wines, history: data.history, ...(data.movements !== undefined ? { movements: data.movements } : {}) }) };
 }

@@ -12,6 +12,7 @@ async function seed(page, data = {}, key = true) {
 async function stored(page) { return page.evaluate(account => JSON.parse(localStorage.getItem(`lgc_cellar_data_${account}`)), account); }
 async function openMargaux(page) { await page.getByLabel('Château Margaux, rangée 1, casier 2', { exact: true }).click(); }
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('lgc_appearance', JSON.stringify({ theme:'dark', presentation:'premium', landing:'cellar' })));
   // Isolate external services; only app behavior is under test.
   await page.route('https://fonts.googleapis.com/**', route => route.abort());
   await page.route('https://fonts.gstatic.com/**', route => route.abort());

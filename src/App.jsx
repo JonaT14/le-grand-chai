@@ -1,3 +1,8 @@
+import './premium.css';
+import Dashboard from './Dashboard.jsx';
+import AppearancePanel from './AppearancePanel.jsx';
+import ValueField from './ValueField.jsx';
+import { readAppearance, stockMovements, appendMovements, validMovements } from './dashboard.js';
 import './wood-cellar.css';
 import BottlePropertiesFields from './BottlePropertiesFields.jsx';
 import ServiceGuide from './ServiceGuide.jsx';
@@ -8,7 +13,7 @@ import {
   Wine, Grid, AlertTriangle, Map as MapIcon, BookOpen, Sparkles,
   Plus, Camera, X, Search, Sliders, ExternalLink, Star,
   Move, Cloud, Download, Upload, Users,
-  ChevronRight, Utensils, Copy, Check, Key, Globe, RefreshCw
+  ChevronRight, Utensils, Copy, Check, Key, Globe, RefreshCw, House, Palette, Ellipsis
 } from 'lucide-react';
 
 import { askGemini, checkAIService, readGeminiKey, DEFAULT_GEMINI_MODEL, SCAN_SCHEMA, SOMMELIER_SCHEMA, LABEL_SCHEMA, resolveSommelier, groundedLabelCandidates, LABEL_CHECK_SCHEMA, safeHttpsUrl } from './ai.js';
@@ -88,7 +93,7 @@ function readPhoto(file) {
 
 function emptyWine() {
   return {
-    category: 'Vin', volumeMl: 750, volumeSource: 'default', closure: 'unknown', quantity: 1, barcode: '', barcodeSource: '', name: '', appellation: '', region: '', vintage: '', type: 'Rouge', bottleShape: 'bordeaux',
+    unitValueCents: null, category: 'Vin', volumeMl: 750, volumeSource: 'default', closure: 'unknown', quantity: 1, barcode: '', barcodeSource: '', name: '', appellation: '', region: '', vintage: '', type: 'Rouge', bottleShape: 'bordeaux',
     grapes: '', peakStart: CURRENT_YEAR, peakEnd: CURRENT_YEAR + 8, drinkLimit: CURRENT_YEAR + 12,
     webRating: null, webReviewCount: 0, webUrl: '', userRating: null, userNotes: '',
     tastingAdvice: '', foodPairing: '', customLabelUrl: null
@@ -1058,7 +1063,22 @@ function RealisticBottleSVG({ wine, size = 'rack' }) {
 // APPLICATION PRINCIPALE : LE GRAND CHAI
 // ============================================================================
 export default function App() {
-  const [activeTab, setActiveTab] = useState('cellar');
+  const [appearance, setAppearance] = useState(() => readAppearance(localStorage));
+  const [appearanceError, setAppearanceError] = useState('');
+  const [showAppearance, setShowAppearance] = useState(false);
+  const [mobileMore, setMobileMore] = useState(false);
+  const premium = appearance.presentation !== 'classic';
+  const [activeTab, setActiveTab] = useState(() => { const p=readAppearance(localStorage); return p.presentation==='classic'?'cellar':p.landing; });
+  useEffect(() => {
+    document.documentElement.dataset.theme = premium ? appearance.theme : 'dark';
+    try { localStorage.setItem('lgc_appearance', JSON.stringify(appearance)); setAppearanceError(''); }
+    catch { setAppearanceError('Apparence non enregistrée : la mémoire de cet appareil est pleine.'); }
+  }, [appearance, premium]);
+  const navigate = tab => { setActiveTab(tab); setMobileMore(false); };
+  const restorePresentation = () => {
+    const next = premium ? { ...appearance, presentation:'classic', theme:'dark', landing:'cellar' } : { ...appearance, presentation:'premium', landing:'dashboard' };
+    setAppearance(next); navigate(next.landing); setShowAppearance(false);
+  };
   const [accountId, setAccountId] = useState(() => localStorage.getItem('lgc_active_account') || 'MA-CAVE-PRINCIPALE');
   const [accounts, setAccounts] = useState(() => loadAccounts(localStorage));
   const [newCellarName, setNewCellarName] = useState('');
@@ -1071,6 +1091,7 @@ export default function App() {
   const [walls, setWalls] = useState(DEFAULT_WALLS);
   const [wines, setWines] = useState(DEFAULT_WINES);
   const [history, setHistory] = useState(DEFAULT_HISTORY);
+  const [movements, setMovements] = useState([]);
   const [selectedWallId, setSelectedWallId] = useState('mur-gauche');
   const [selectedWine, setSelectedWine] = useState(null);
   const selectedWineRef = useRef(selectedWine);
@@ -1082,6 +1103,7 @@ export default function App() {
   const [portionCl, setPortionCl] = useState('12.5');
   const [showSensorDemo, setShowSensorDemo] = useState(true);
   const addPropertiesValid = useRef(true);
+  const addValueValid = useRef(true);
   const [filterType, setFilterType] = useState('Tous');
 
   // Modales
@@ -1113,8 +1135,8 @@ export default function App() {
   const [deletingWallId, setDeletingWallId] = useState(null);
   const [destinationWallId, setDestinationWallId] = useState('');
   const [addError, setAddError] = useState('');
-  const cellarRef = useRef({ walls, wines, history });
-  cellarRef.current = { walls, wines, history };
+  const cellarRef = useRef({ walls, wines, history, movements });
+  cellarRef.current = { walls, wines, history, movements };
   const accountEpoch = useRef(0);
 
   // États du Sommelier IA
@@ -1132,6 +1154,7 @@ export default function App() {
   // Chargement des données du compte actif et migration des sauvegardes précédentes
   useEffect(() => {
     accountEpoch.current += 1;
+    setMovements([]); setMobileMore(false);
     setSelectedWine(null);
     setGuestCount(''); setFormatFilter('all');
     setMovingWine(null);
@@ -1150,6 +1173,7 @@ export default function App() {
     try {
       const parsed = loadCellar(localStorage, accountId);
       if (parsed) {
+        setMovements(validMovements(parsed.movements) ? parsed.movements : []);
         setWalls(parsed.walls?.length ? parsed.walls : DEFAULT_WALLS);
         setSelectedWallId(parsed.walls?.[0]?.id || DEFAULT_WALLS[0].id);
         if (Array.isArray(parsed.wines)) setWines(parsed.wines);
@@ -1170,14 +1194,15 @@ export default function App() {
   }, [accountId]);
 
   // Sauvegarde locale + Google Drive Kava 20
-  const saveCellarData = async (nextWalls = walls, nextWines = wines, nextHistory = history, persistedPayload = null) => {
+  const saveCellarData = async (nextWalls = walls, nextWines = wines, nextHistory = history, persistedPayload = null, nextMovements = movements) => {
     const payload = persistedPayload || {
       folderName: 'Kava 20',
       accountId,
       updatedAt: new Date().toISOString(),
       walls: nextWalls,
       wines: nextWines,
-      history: nextHistory
+      history: nextHistory,
+      movements: nextMovements
     };
     if (!persistedPayload) try {
       localStorage.setItem(`lgc_cellar_data_${accountId}`, JSON.stringify(payload));
@@ -1203,17 +1228,20 @@ export default function App() {
   };
 
   const updateCellar = (nextWalls, nextWines, nextHistory, persistFirst = false) => {
+    const current = cellarRef.current;
+    const nextMovements = appendMovements(current.movements || [], stockMovements(current.wines, nextWines, current.history, nextHistory));
     let persistedPayload = null;
     if (persistFirst) {
-      persistedPayload = { folderName: 'Kava 20', accountId, updatedAt: new Date().toISOString(), walls: nextWalls, wines: nextWines, history: nextHistory };
+      persistedPayload = { folderName: 'Kava 20', accountId, updatedAt: new Date().toISOString(), walls: nextWalls, wines: nextWines, history: nextHistory, movements: nextMovements };
       try { localStorage.setItem(`lgc_cellar_data_${accountId}`, JSON.stringify(persistedPayload)); }
       catch { throw new Error('La mémoire du navigateur est pleine. Rien n’a été ajouté. Exportez votre cave ou réduisez la sélection avant de réessayer.'); }
     }
-    cellarRef.current = { walls: nextWalls, wines: nextWines, history: nextHistory };
+    cellarRef.current = { walls: nextWalls, wines: nextWines, history: nextHistory, movements: nextMovements };
     setWalls(nextWalls);
     setWines(nextWines);
     setHistory(nextHistory);
-    saveCellarData(nextWalls, nextWines, nextHistory, persistedPayload);
+    setMovements(nextMovements);
+    saveCellarData(nextWalls, nextWines, nextHistory, persistedPayload, nextMovements);
   };
 
   const patchWine = (id, changes, epoch = accountEpoch.current) => {
@@ -1483,6 +1511,7 @@ export default function App() {
   const handleAddWineSubmit = async (e) => {
     e.preventDefault();
     setAddError('');
+    if (!addValueValid.current) { setAddError('Corrigez la valeur estimée avant d’ajouter la bouteille.'); return; }
     if (!addPropertiesValid.current) { setAddError('Corrigez la contenance avant d’ajouter la bouteille.'); return; }
     const epoch = accountEpoch.current;
     let quantity, barcode = '';
@@ -1598,9 +1627,9 @@ export default function App() {
   }, [wines, searchQuery, filterType, formatFilter, guestCount, portionCl]);
 
   return (
-    <div className="min-h-screen bg-[#0F0A08] text-stone-100 flex flex-col md:flex-row pb-20 md:pb-0">
+    <div data-theme={premium ? appearance.theme : 'dark'} className={`chai-app ${premium ? 'chai-app--premium' : ''} min-h-screen bg-[#0F0A08] text-stone-100 flex flex-col md:flex-row pb-20 md:pb-0`}>
       {/* BARRE LATÉRALE SUR ORDINATEUR */}
-      <aside className="hidden md:flex md:w-80 bg-[#160F0B] border-r border-amber-900/30 flex-col justify-between p-6 shrink-0">
+      <aside className="app-sidebar hidden md:flex md:w-80 bg-[#160F0B] border-r border-amber-900/30 flex-col justify-between p-6 shrink-0">
         <div>
           <div className="flex items-center gap-3 mb-8">
             <img src="/images/cave-grand-chai.jpeg" alt="Cave voûtée du Grand Chai" width="88" height="88" className="w-[88px] h-[88px] shrink-0 rounded-2xl object-cover border border-amber-700/50 shadow-lg" />
@@ -1612,6 +1641,7 @@ export default function App() {
 
           <nav className="space-y-2">
             {[
+              ...(premium ? [{ id:'dashboard', label:'Accueil', icon:House }] : []),
               { id: 'cellar', label: 'Plan de Cave & Casiers', icon: Grid },
               { id: 'apogee', label: 'Suivi Apogée & Alertes', icon: AlertTriangle },
               { id: 'sommelier', label: 'Sommelier IA (Accords)', icon: Utensils },
@@ -1622,8 +1652,9 @@ export default function App() {
               return (
                 <button
                   key={item.id}
-                  onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                  onClick={() => navigate(item.id)}
+                  aria-current={activeTab === item.id ? 'page' : undefined}
+                  className={`app-nav-button w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
                     activeTab === item.id
                       ? 'bg-gradient-to-r from-amber-800/60 to-red-950/60 text-amber-200 border border-amber-600/40 shadow-md'
                       : 'text-stone-400 hover:bg-stone-900/60 hover:text-stone-200'
@@ -1660,10 +1691,11 @@ export default function App() {
       {/* CONTENU PRINCIPAL */}
       <main className="flex-1 flex flex-col min-w-0">
         {/* EN-TÊTE SUPÉRIEUR */}
-        <header className="bg-[#160F0B]/95 border-b border-amber-900/30 px-4 md:px-8 py-4 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-20 backdrop-blur-md">
+        <header className="app-header bg-[#160F0B]/95 border-b border-amber-900/30 px-4 md:px-8 py-4 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-20 backdrop-blur-md">
           <div className="flex items-center gap-3 min-w-0">
             <img src="/images/cave-grand-chai.jpeg" alt="Cave voûtée du Grand Chai" width="88" height="88" className="md:hidden w-[88px] h-[88px] shrink-0 rounded-2xl object-cover border border-amber-700/50 shadow-lg" />
             <h2 className="text-xl md:text-2xl font-serif font-bold text-amber-100">
+              {activeTab === 'dashboard' && 'Bienvenue dans votre cave'}
               {activeTab === 'cellar' && 'Vos Casiers en Chêne Massif'}
               {activeTab === 'apogee' && 'Suivi de l’Apogée & Limites de Buvabilité'}
               {activeTab === 'sommelier' && 'Sommelier IA : Accords Mets, Vins & Cidres'}
@@ -1673,6 +1705,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
+            <button type="button" className="appearance-trigger" aria-label="Apparence et accueil" onClick={() => setShowAppearance(true)}><Palette size={17} /><span className="text-xs">Apparence</span></button>
             <button
               onClick={() => setShowCloudModal(true)}
               className="md:hidden p-2.5 rounded-xl bg-stone-900 border border-amber-800/40 text-amber-300"
@@ -1703,6 +1736,12 @@ export default function App() {
             </button>
           </div>
         </header>
+
+        {appearanceError && <p role="alert" className="px-5 py-2 text-xs text-amber-400">{appearanceError}</p>}
+        {premium && activeTab === 'dashboard' && (loadedAccountId === accountId ? <Dashboard key={accountId} accountId={accountId} caveName={accounts.find(a => a.id === accountId)?.name || accountId} wines={wines} walls={walls} history={history} movements={movements}
+          onOpen={wine => { setSelectedWine(wine); setLabelStatusMsg(''); setWebSearchCandidates([]); setWebSearchGrounding(null); }}
+          onBrowse={({ type='Tous', query='' }) => { setFilterType(type); setSearchQuery(query); setFormatFilter('all'); setGuestCount(''); navigate('cellar'); }}
+          onNavigate={navigate} onAdd={() => { setNewWine(emptyWine()); setAddSlotTarget(null); setAddError(''); setShowAddModal(true); }} onScan={() => { setScanImportMessage(''); setShowScannerModal(true); }} renderBottle={wine => <RealisticBottleSVG wine={wine} size="rack" />} /> : <p className="p-8 text-stone-400">Chargement de votre cave…</p>)}
 
         {/* ONGLET 1 : PLAN DE CAVE & CASIERS */}
         {activeTab === 'cellar' && (
@@ -2255,19 +2294,23 @@ export default function App() {
       </main>
 
       {/* BARRE DE NAVIGATION FIXE EN BAS SUR TÉLÉPHONE */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 bg-[#140D09]/95 border-t border-amber-800/40 flex items-center justify-around py-2.5 z-30 backdrop-blur-md">
-        {[
+      <nav className="app-bottom-nav md:hidden fixed bottom-0 inset-x-0 bg-[#140D09]/95 border-t border-amber-800/40 flex items-center justify-around py-2.5 z-30 backdrop-blur-md">
+        {(premium ? [
+          { id:'dashboard', label:'Accueil', icon:House }, { id:'cellar', label:'Cave', icon:Grid }, { id:'sommelier', label:'Accords', icon:Utensils }, { id:'history', label:'Carnet', icon:BookOpen }, { id:'more', label:'Plus', icon:Ellipsis }
+        ] : [
           { id: 'cellar', label: 'Cave', icon: Grid },
           { id: 'apogee', label: 'Apogée', icon: AlertTriangle },
           { id: 'sommelier', label: 'Accords', icon: Utensils },
           { id: 'map', label: 'Carte', icon: MapIcon },
           { id: 'history', label: 'Carnet', icon: BookOpen }
-        ].map((item) => {
+        ]).map((item) => {
           const Icon = item.icon;
           return (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => item.id === 'more' ? setMobileMore(!mobileMore) : navigate(item.id)}
+              aria-current={activeTab === item.id ? 'page' : undefined}
+              aria-expanded={item.id === 'more' ? mobileMore : undefined}
               className={`flex flex-col items-center gap-1 text-[11px] font-medium ${
                 activeTab === item.id ? 'text-amber-400' : 'text-stone-400'
               }`}
@@ -2282,6 +2325,8 @@ export default function App() {
       {/* =====================================================================
           VITRINE DÉTAILLÉE DE LA BOUTEILLE + STUDIO D'ÉTIQUETTE IA / WEB / SCAN
       ===================================================================== */}
+      {premium && mobileMore && <div className="premium-more md:hidden" aria-label="Autres pages"><button onClick={() => navigate('apogee')}>Suivi de l’apogée</button><button onClick={() => navigate('map')}>Carte des terroirs</button><button onClick={() => { setMobileMore(false); setShowCloudModal(true); }}>Caves & sauvegardes</button><button onClick={() => { setMobileMore(false); setShowAppearance(true); }}>Apparence & accueil</button></div>}
+      {showAppearance && <AppearancePanel value={appearance} onChange={setAppearance} onClose={() => setShowAppearance(false)} onRestore={restorePresentation} />}
       {selectedWine && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-[#18100C] border-2 border-amber-700/50 rounded-3xl max-w-4xl w-full overflow-hidden shadow-2xl grid grid-cols-1 md:grid-cols-12 my-auto max-h-[92vh] overflow-y-auto">
@@ -2444,6 +2489,7 @@ export default function App() {
                   {getQuantity(selectedWine) === 0 && <button type="button" onClick={() => handleRemoveEmptyReference(selectedWine)} className="text-xs text-stone-400 underline hover:text-amber-200">Retirer la fiche épuisée du casier</button>}
                 </div>
 
+                <ValueField key={`value-${selectedWine.id}`} value={selectedWine.unitValueCents} onChange={unitValueCents => patchWine(selectedWine.id, { unitValueCents })} />
                 <BottlePropertiesFields key={selectedWine.id} wine={selectedWine} onChange={changes => patchWine(selectedWine.id, changes)} />
                 <ServiceGuide key={`${accountId}/${selectedWine.id}`} wine={selectedWine} gemini={gemini} onSave={changes => patchWine(selectedWine.id, changes)} />
                 <div className="space-y-2 text-xs">
@@ -2671,6 +2717,7 @@ export default function App() {
                 </div>
               </div>
 
+              <ValueField key={showAddModal ? 'value-add-open' : 'value-add-closed'} value={newWine.unitValueCents} onChange={unitValueCents => setNewWine(prev => ({ ...prev, unitValueCents }))} onValidityChange={valid => { addValueValid.current = valid; }} />
               <BottlePropertiesFields key={showAddModal ? 'add-open' : 'add-closed'} wine={newWine} onChange={changes => setNewWine(prev => ({ ...prev, ...changes }))} onValidityChange={valid => { addPropertiesValid.current = valid; }} />
               <div className="grid grid-cols-3 gap-3">
                 <div>
@@ -2847,7 +2894,7 @@ export default function App() {
                 <div className="flex gap-2 pt-2">
                   <button
                     onClick={() => {
-                      const blob = new Blob([JSON.stringify({ format: 'le-grand-chai', version: 1, name: accounts.find(a => a.id === accountId)?.name || 'Ma cave', owner: accounts.find(a => a.id === accountId)?.owner || '', cellar: { walls, wines, history } }, null, 2)], { type: 'application/json' });
+                      const blob = new Blob([JSON.stringify({ format: 'le-grand-chai', version: 1, name: accounts.find(a => a.id === accountId)?.name || 'Ma cave', owner: accounts.find(a => a.id === accountId)?.owner || '', cellar: { walls, wines, history, movements } }, null, 2)], { type: 'application/json' });
                       const url = URL.createObjectURL(blob);
                       const a = document.createElement('a');
                       a.href = url;
