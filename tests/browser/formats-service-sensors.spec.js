@@ -4,7 +4,8 @@ const wine={id:'w',name:'Château Démonstration',appellation:'Margaux',type:'Ro
 async function seed(page,wines=[wine]) {await page.addInitScript(({key,wines})=>{if(!localStorage.getItem(key))localStorage.setItem(key,JSON.stringify({walls:[{id:'mur',name:'Mur test',rows:1,cols:3}],wines,history:[]}));localStorage.setItem('lgc_gemini_api_key','test-key');},{key,wines});}
 const stored=page=>page.evaluate(key=>JSON.parse(localStorage.getItem(key)),key);
 const open=page=>page.getByLabel('Château Démonstration, rangée 1, casier 1',{exact:true}).click();
-test.beforeEach(async({page})=>{await page.route('https://fonts.googleapis.com/**',r=>r.abort());await page.route('https://fonts.gstatic.com/**',r=>r.abort());});
+test.beforeEach(async({page})=>{
+  await page.addInitScript(() => localStorage.setItem('lgc_appearance', JSON.stringify({ theme:'dark', presentation:'premium', landing:'cellar' })));await page.route('https://fonts.googleapis.com/**',r=>r.abort());await page.route('https://fonts.gstatic.com/**',r=>r.abort());});
 test('legacy format can be edited and retained after reload without changing maturity, notes or rating',async({page})=>{
  await seed(page);await page.goto('/');await page.getByRole('button',{name:'Château Démonstration, rangée 1, casier 1',exact:true}).press('Enter');
  await expect(page.getByLabel('Contenance (cl)',{exact:true})).toHaveValue('75');

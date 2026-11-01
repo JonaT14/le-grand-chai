@@ -4,6 +4,7 @@ const service = 'le-grand-chai-ai';
 const photo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');
 const answer = value => ({ service, status: 200, data: { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(value) }] } }] } });
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('lgc_appearance', JSON.stringify({ theme:'dark', presentation:'premium', landing:'cellar' })));
   await page.route('https://fonts.googleapis.com/**', route => route.abort());
   await page.route('https://fonts.gstatic.com/**', route => route.abort());
   await page.route('https://generativelanguage.googleapis.com/**', () => { throw new Error('The browser must never call Gemini directly'); });

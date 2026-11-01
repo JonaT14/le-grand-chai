@@ -13,7 +13,8 @@ async function seed(page,cellar, key=true){await page.addInitScript(({cellar,key
 async function stored(page){return page.evaluate(key=>JSON.parse(localStorage.getItem(key)),dataKey);}
 async function scanner(page){await page.goto('/');await page.getByRole('button',{name:'Scanner',exact:true}).click();}
 async function batch(page,files=[file('premiere.png'),file('deuxieme.png')]){await scanner(page);await page.getByRole('button',{name:'Import en masse',exact:true}).click();await page.getByLabel('Photos à importer').setInputFiles(files);await page.getByRole('button',{name:'Analyser les photos restantes',exact:true}).click();}
-test.beforeEach(async({page})=>{await page.route('https://fonts.googleapis.com/**',r=>r.abort());await page.route('https://fonts.gstatic.com/**',r=>r.abort());});
+test.beforeEach(async({page})=>{
+  await page.addInitScript(() => localStorage.setItem('lgc_appearance', JSON.stringify({ theme:'dark', presentation:'premium', landing:'cellar' })));await page.route('https://fonts.googleapis.com/**',r=>r.abort());await page.route('https://fonts.gstatic.com/**',r=>r.abort());});
 
 test('barcode photo decodes with the real cross-browser reader and saves the photo, source and code',async({page})=>{
  await seed(page,null,false);
