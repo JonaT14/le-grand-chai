@@ -1,3 +1,4 @@
+import BottlePropertiesFields from './BottlePropertiesFields.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { Camera, X } from 'lucide-react';
 import { decodeBarcode, lookupBarcode, normalizeBarcode, matchingScanWines, sameScanReference, MAX_SCAN_FILES, waitScanTurn } from './scanner.js';
@@ -119,12 +120,13 @@ export default function BottleScanner({ categories, wines, makeDraft, preparePho
       }
     } finally { finish(id); }
   };
-  const updateDraft = (id, change) => setRows(prev => prev.map(row => row.id === id ? { ...row, draft: { ...row.draft, ...change }, targetId: ['name', 'type', 'vintage', 'category', 'appellation'].some(key => key in change) ? '' : row.targetId } : row));
+  const updateDraft = (id, change) => setRows(prev => prev.map(row => row.id === id ? { ...row, draft: { ...row.draft, ...change }, targetId: ['name', 'type', 'vintage', 'category', 'appellation', 'volumeMl', 'closure'].some(key => key in change) ? '' : row.targetId } : row));
   const commit = async () => {
     if (busyRef.current || commitLock.current) return;
     setError('');
     const selected = rows.filter(row => row.included);
     if (!selected.length) { setError('Sélectionnez au moins une fiche.'); return; }
+    if (selected.some(row => row.propertiesValid === false)) { setError('Corrigez la contenance des fiches sélectionnées.'); return; }
     if (selected.some(row => row.status !== 'ready')) { setError('Analysez, corrigez manuellement ou excluez les photos qui ne sont pas prêtes.'); return; }
     commitLock.current = true; setCommitting(true);
     try { await onImport(selected.map(({ draft, targetId }) => ({ draft, targetId }))); }
@@ -192,10 +194,11 @@ export default function BottleScanner({ categories, wines, makeDraft, preparePho
                 <div className="grid grid-cols-2 gap-3">
                   <label>Millésime (facultatif)<input aria-label={`Millésime de la fiche ${number}`} type="number" min="1800" max={new Date().getFullYear()} value={row.draft.vintage ?? ''} disabled={busy || committing} onChange={event => updateDraft(row.id, { vintage: event.target.value })} className={fieldClass} /></label>
                   <label>Quantité<input aria-label={`Quantité de la fiche ${number}`} type="number" min="1" step="1" value={row.draft.quantity} disabled={busy || committing} onChange={event => updateDraft(row.id, { quantity: event.target.value })} className={fieldClass} /></label>
-                  <label>Catégorie<select aria-label={`Catégorie de la fiche ${number}`} value={row.draft.category} disabled={busy || committing} onChange={event => updateDraft(row.id, { category: event.target.value, type: categories[event.target.value].types[0], bottleShape: categories[event.target.value].defaultShape })} className={fieldClass}>{Object.entries(categories).map(([key, data]) => <option key={key} value={key}>{data.label}</option>)}</select></label>
+                  <label>Catégorie<select aria-label={`Catégorie de la fiche ${number}`} value={row.draft.category} disabled={busy || committing} onChange={event => updateDraft(row.id, { ...(row.draft.volumeSource === 'default' || row.draft.volumeSource === 'unknown' ? { volumeMl: event.target.value === 'Vin' ? 750 : null, volumeSource: event.target.value === 'Vin' ? 'default' : 'unknown' } : {}), category: event.target.value, type: categories[event.target.value].types[0], bottleShape: categories[event.target.value].defaultShape })} className={fieldClass}>{Object.entries(categories).map(([key, data]) => <option key={key} value={key}>{data.label}</option>)}</select></label>
                   <label>Type<select aria-label={`Type de la fiche ${number}`} value={row.draft.type} disabled={busy || committing} onChange={event => updateDraft(row.id, { type: event.target.value })} className={fieldClass}>{categories[row.draft.category].types.map(type => <option key={type}>{type}</option>)}</select></label>
                 </div>
                 <label className="block">Région<input aria-label={`Région de la fiche ${number}`} maxLength={240} value={row.draft.region} disabled={busy || committing} onChange={event => updateDraft(row.id, { region: event.target.value })} className={fieldClass} /></label>
+                <BottlePropertiesFields wine={row.draft} onChange={change => updateDraft(row.id, change)} onValidityChange={valid => patchRow(row.id, { propertiesValid: valid })} />
                 {duplicate && <p className="text-amber-300">Une autre photo sélectionnée semble représenter cette bouteille. Ajustez la quantité ou excluez le doublon si nécessaire.</p>}
                 {!!matches.length && <label className="block text-amber-200">Cette référence existe dans la cave<select aria-label={`Destination de la fiche ${number}`} value={row.targetId} disabled={busy || committing} onChange={event => patchRow(row.id, { targetId: event.target.value })} className={fieldClass}><option value="">Créer une nouvelle fiche dans un autre casier</option>{matches.map(wine => <option key={wine.id} value={wine.id}>Ajouter au stock de {wine.name} ({wine.quantity ?? 1} en stock)</option>)}</select></label>}
               </div>}

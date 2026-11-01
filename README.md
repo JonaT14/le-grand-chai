@@ -105,3 +105,16 @@ Références Google consultées le 31 octobre 2026 : [modèles retirés](https:/
 ## Limites de validation
 
 Les tests vérifient les requêtes, le traitement des réponses, les erreurs et les parcours d'interface avec des réponses simulées. Le service partagé, une requête Gemini et un accord du sommelier sur la cave de démonstration ont aussi été vérifiés en réel depuis un navigateur sans clé locale. La précision de lecture sur les photographies personnelles et les droits des modèles de recherche d’images restent dépendants du projet Google. Aucun déploiement ni fusion sur `main` n'est effectué par ces tests.
+
+## Formats, bouchages et service
+
+- Toutes les boissons ont une contenance modifiable (cl, stockée en ml) et un bouchage dans la fiche et lors de l'ajout. Le vin reçoit 75 cl par défaut ; les anciennes références de cidre et de spiritueux restent de contenance inconnue. Les grands formats sont nommés avec leur volume, car « jéroboam » varie selon la région.
+- Le scan lit la contenance uniquement si visible. Le catalogue de codes-barres fournit la quantité par bouteille lorsqu'elle est explicite ; le total d'un lot n'est pas utilisé comme taille de bouteille. Toujours vérifier avant validation. Les formats différents ne sont pas proposés pour un même réapprovisionnement.
+- Le plan affiche la contenance et permet de filtrer par volume et par capacité pour un événement (stock × portions entières par bouteille). La portion par convive est modifiable ; il s'agit d'un calcul de capacité. Les contenances inconnues sont exclues de ce calcul.
+- Les conseils de température, d'aération et de décantation apparaissent automatiquement par style et millésime. Un horaire de repas permet de préparer l'ouverture et, si un dépôt est suspecté, le redressement de la bouteille. Les repères généraux sont indicatifs et ne remplacent pas les consignes du producteur ni une vérification à l'ouverture.
+- « Affiner avec Google IA » produit un conseil adapté aux métadonnées de la cuvée et le conserve dans la sauvegarde. Une modification du format, du bouchage ou des données de la cuvée invalide ce conseil ; les repères généraux restent disponibles. Aucun appel IA n'est lancé à l'ouverture d'une fiche. Les anciennes notes de dégustation et dates de garde sont conservées.
+- L'effet du format sur la garde est décrit qualitativement : aucun multiplicateur d'années n'est appliqué. La cire ne permet pas de connaître la nature du bouchon sous-jacent.
+
+## Aperçu des capteurs par casier
+
+Le plan affiche une température et une hygrométrie **simulées**, également pour les emplacements vides. La bannière et chaque indicateur portent la mention « Démo » ; un clic donne les explications, et la case « Afficher la démo des capteurs » masque l'aperçu. Aucun matériel n'est connecté, aucune date de mesure ou alerte réelle n'est fabriquée. Ces valeurs restent associées aux coordonnées de l'emplacement dans la cave ; elles ne suivent pas les bouteilles et ne sont pas enregistrées dans les stocks, les sauvegardes, le carnet ou les requêtes IA. Le raccordement réel sera défini avec le matériel choisi.

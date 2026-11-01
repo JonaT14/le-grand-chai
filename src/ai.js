@@ -101,7 +101,8 @@ export const SCAN_SCHEMA = {
   type: 'OBJECT', required: ['name', 'category', 'type'], properties: {
     name: string, category: { type: 'STRING', enum: ['Vin', 'Cidre', 'Alcool'] }, type: string,
     appellation: string, region: string, grapes: string,
-    vintage: { type: 'INTEGER', nullable: true }
+    vintage: { type: 'INTEGER', nullable: true }, volumeMl: { type: 'INTEGER', nullable: true },
+    closure: { type: 'STRING', enum: ['unknown','natural_cork','screw_cap','technical_cork','wax','synthetic','crown_cap','swing_top','other'] }
   }
 };
 export const SOMMELIER_SCHEMA = {

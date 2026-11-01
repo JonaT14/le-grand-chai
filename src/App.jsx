@@ -1,3 +1,7 @@
+import BottlePropertiesFields from './BottlePropertiesFields.jsx';
+import ServiceGuide from './ServiceGuide.jsx';
+import SensorDemo from './SensorDemo.jsx';
+import { getVolumeMl, volumeText, eventCapacity } from './bottle-properties.js';
 import React, { useState, useEffect, useMemo, useRef, useId } from 'react';
 import {
   Wine, Grid, AlertTriangle, Map as MapIcon, BookOpen, Sparkles,
@@ -83,7 +87,7 @@ function readPhoto(file) {
 
 function emptyWine() {
   return {
-    category: 'Vin', quantity: 1, barcode: '', barcodeSource: '', name: '', appellation: '', region: '', vintage: '', type: 'Rouge', bottleShape: 'bordeaux',
+    category: 'Vin', volumeMl: 750, volumeSource: 'default', closure: 'unknown', quantity: 1, barcode: '', barcodeSource: '', name: '', appellation: '', region: '', vintage: '', type: 'Rouge', bottleShape: 'bordeaux',
     grapes: '', peakStart: CURRENT_YEAR, peakEnd: CURRENT_YEAR + 8, drinkLimit: CURRENT_YEAR + 12,
     webRating: null, webReviewCount: 0, webUrl: '', userRating: null, userNotes: '',
     tastingAdvice: '', foodPairing: '', customLabelUrl: null
@@ -1072,6 +1076,11 @@ export default function App() {
   selectedWineRef.current = selectedWine;
   const [movingWine, setMovingWine] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [formatFilter, setFormatFilter] = useState('all');
+  const [guestCount, setGuestCount] = useState('');
+  const [portionCl, setPortionCl] = useState('12.5');
+  const [showSensorDemo, setShowSensorDemo] = useState(true);
+  const addPropertiesValid = useRef(true);
   const [filterType, setFilterType] = useState('Tous');
 
   // Modales
@@ -1123,6 +1132,7 @@ export default function App() {
   useEffect(() => {
     accountEpoch.current += 1;
     setSelectedWine(null);
+    setGuestCount(''); setFormatFilter('all');
     setMovingWine(null);
     setSommelierResult(null);
     setSommelierError('');
@@ -1452,7 +1462,7 @@ export default function App() {
 
   const analyzeScanLabel = async (photo, signal) => {
     const { value } = await gemini({ image: photo, schema: SCAN_SCHEMA, signal,
-      prompt: `Lis cette étiquette de bouteille. Extrais uniquement les informations lisibles : name (domaine, marque et cuvée), appellation, region, vintage (année, ou null si absente), grapes (cépages ou variétés). Classe la boisson avec category et type parmi : ${JSON.stringify(Object.fromEntries(Object.entries(DRINK_CATEGORIES).map(([cat, data]) => [cat, data.types])))}. Pour une image sans étiquette lisible, renvoie name vide. N'invente ni notes, ni millésime, ni dates de garde.`
+      prompt: `Lis cette étiquette de bouteille. Extrais uniquement les informations lisibles : name (domaine, marque et cuvée), appellation, region, vintage (année, ou null si absente), grapes (cépages ou variétés). Classe la boisson avec category et type parmi : ${JSON.stringify(Object.fromEntries(Object.entries(DRINK_CATEGORIES).map(([cat, data]) => [cat, data.types])))}. Pour une image sans étiquette lisible, renvoie name vide. Lis aussi volumeMl (contenance d’une seule bouteille, en ml, uniquement si lisible ; null sinon) et closure parmi unknown, natural_cork, screw_cap, technical_cork, wax, synthetic, crown_cap, swing_top, other. Un code-barres seul ne révèle pas le bouchage. Ne déduis pas le bouchon sous la cire. N'invente ni notes, ni millésime, ni dates de garde.`
     });
     return scanFields(value, DRINK_CATEGORIES);
   };
@@ -1472,6 +1482,7 @@ export default function App() {
   const handleAddWineSubmit = async (e) => {
     e.preventDefault();
     setAddError('');
+    if (!addPropertiesValid.current) { setAddError('Corrigez la contenance avant d’ajouter la bouteille.'); return; }
     const epoch = accountEpoch.current;
     let quantity, barcode = '';
     try {
@@ -1551,7 +1562,7 @@ export default function App() {
     const epoch = accountEpoch.current;
     setIsAskingSommelier(true);
     try {
-      const inventory = wines.filter(w => getQuantity(w) > 0).map(w => ({ id: w.id, quantity: getQuantity(w), name: w.name, vintage: w.vintage, type: w.type, appellation: w.appellation, region: w.region, grapes: w.grapes, foodPairing: w.foodPairing, maturity: getApogeeInfo(w).label }));
+      const inventory = wines.filter(w => getQuantity(w) > 0).map(w => ({ id: w.id, quantity: getQuantity(w), name: w.name, vintage: w.vintage, type: w.type, appellation: w.appellation, region: w.region, grapes: w.grapes, foodPairing: w.foodPairing, volumeMl: getVolumeMl(w), closure: w.closure || 'unknown', maturity: getApogeeInfo(w).label }));
       const { value } = await gemini({ schema: SOMMELIER_SCHEMA,
         prompt: `Tu es sommelier. Pour cette demande ${JSON.stringify(dish)}, propose la meilleure bouteille de cet inventaire et une alternative pertinente si possible : ${JSON.stringify(inventory)}. Retourne bestWineId et secondWineId (identifiants exacts, jamais inventés), reason (explication précise de l'accord, en tenant compte des ingrédients et de la cuisson) et serviceTip (température, carafage). Si aucun accord n'est idéal, explique la limite honnêtement. Ne recommande aucune bouteille hors de cet inventaire.`
       });
@@ -1575,12 +1586,15 @@ export default function App() {
     return wines.filter((w) => {
       const matchSearch = `${w.name} ${w.appellation} ${w.region} ${w.vintage} ${w.type}`.toLowerCase().includes(searchQuery.toLowerCase());
       if (!matchSearch) return false;
+      const volume = getVolumeMl(w);
+      if (formatFilter !== 'all' && (formatFilter === 'unknown' ? volume !== null : volume !== Number(formatFilter))) return false;
+      if (guestCount !== '' && (!Number.isInteger(Number(guestCount)) || Number(guestCount) < 1 || eventCapacity(w, Number(portionCl) * 10) < Number(guestCount))) return false;
       if (filterType === 'Tous') return true;
       if (filterType === 'Cidre') return getCategoryFromType(w.type) === 'Cidre';
       if (filterType === 'Alcool') return getCategoryFromType(w.type) === 'Alcool';
       return w.type === filterType;
     });
-  }, [wines, searchQuery, filterType]);
+  }, [wines, searchQuery, filterType, formatFilter, guestCount, portionCl]);
 
   return (
     <div className="min-h-screen bg-[#0F0A08] text-stone-100 flex flex-col md:flex-row pb-20 md:pb-0">
@@ -1761,6 +1775,16 @@ export default function App() {
               </div>
             )}
 
+            <div className="flex flex-wrap gap-3 items-end text-xs p-3 rounded-xl bg-stone-900/60 border border-amber-900/30">
+              <label>Format à afficher<select aria-label="Filtrer par contenance" value={formatFilter} onChange={e=>setFormatFilter(e.target.value)} className="block bg-stone-950 p-2 rounded-lg mt-1"><option value="all">Tous les formats</option>{[...new Set([375,750,1500,3000,4500,...wines.map(getVolumeMl).filter(ml=>ml !== null)])].sort((a,b)=>a-b).map(ml=><option key={ml} value={ml}>{ml/10} cl</option>)}<option value="unknown">Contenance inconnue</option></select></label>
+              <label>Nombre de convives<input aria-label="Nombre de convives" type="number" min="1" step="1" value={guestCount} onChange={e=>setGuestCount(e.target.value)} className="block w-28 bg-stone-950 p-2 rounded-lg mt-1" placeholder="Facultatif" /></label>
+              <label>Portion par convive (cl)<input aria-label="Portion par convive (cl)" type="number" min="0.1" step="0.1" value={portionCl} onChange={e=>setPortionCl(e.target.value)} className="block w-28 bg-stone-950 p-2 rounded-lg mt-1" /></label>
+              <p className="text-stone-400">{filteredWines.length} référence(s) correspondante(s) · les autres casiers sont atténués. Capacité calculée sur le stock, pour une portion par personne ; les contenances inconnues sont exclues du calcul.</p>
+            </div>
+            <div className="p-3 rounded-xl bg-cyan-950/20 border border-cyan-900/50 text-xs flex flex-wrap gap-2 justify-between items-center">
+              <p><strong className="text-cyan-200">Aperçu des capteurs · données simulées</strong><br /><span className="text-stone-400">Aucun capteur connecté. Une température et une hygrométrie fictives par casier, même vide.</span></p>
+              <label className="flex gap-2 items-center"><input type="checkbox" checked={showSensorDemo} onChange={e=>setShowSensorDemo(e.target.checked)} />Afficher la démo des capteurs</label>
+            </div>
             {/* Grille des casiers en chêne massif */}
             <div className="p-5 md:p-8 rounded-3xl bg-gradient-to-b from-[#261710] via-[#1B100B] to-[#140B07] border-4 border-[#3E2417] shadow-2xl overflow-x-auto">
               <div
@@ -1799,7 +1823,7 @@ export default function App() {
                         }}
                         style={{ opacity: matchesFilter ? 1 : 0.25 }}
                         aria-label={bottle ? `${bottle.name}, rangée ${row}, casier ${col}` : `Casier libre, rangée ${row}, colonne ${col}`}
-                        className="group relative h-64 rounded-2xl bg-gradient-to-b from-[#1A0F0A] via-[#110906] to-[#24150E] border-2 border-[#472A1B] hover:border-amber-500/80 shadow-inner flex flex-col items-center justify-between p-2.5 cursor-pointer transition-all"
+                        className="group relative h-72 rounded-2xl bg-gradient-to-b from-[#1A0F0A] via-[#110906] to-[#24150E] border-2 border-[#472A1B] hover:border-amber-500/80 shadow-inner flex flex-col items-center justify-between p-2.5 cursor-pointer transition-all"
                       >
                         {/* Éclairage spot chaud de cave */}
                         <div className="absolute inset-x-4 top-0 h-16 bg-gradient-to-b from-amber-500/15 to-transparent pointer-events-none rounded-t-xl" />
@@ -1835,13 +1859,14 @@ export default function App() {
                           <div className="w-full bg-gradient-to-r from-[#8B6B35] via-[#C5A059] to-[#8B6B35] text-stone-950 rounded-md px-2 py-1 text-center shadow-md">
                             <div className="text-[10px] font-serif font-bold truncate leading-tight">{bottle.name}</div>
                             <div className="text-[9px] font-semibold opacity-85">
-                              {bottle.vintage} • {bottle.type}
+                              {bottle.vintage} • {bottle.type} • {volumeText(bottle)}
                             </div>
                             <div className="text-[11px] font-bold">{getQuantity(bottle) === 0 ? 'Stock épuisé' : `${getQuantity(bottle)} bouteille${getQuantity(bottle) === 1 ? '' : 's'}`}</div>
                           </div>
                         ) : (
                           <div className="w-full h-6 rounded-md bg-stone-950/40 border border-stone-800/40" />
                         )}
+                        {showSensorDemo && <SensorDemo key={`${accountId}/${activeWall.id}/${row}/${col}`} accountId={accountId} wallId={activeWall.id} row={row} col={col} />}
                       </div>
                     );
                   })
@@ -2199,7 +2224,7 @@ export default function App() {
             {history.map((h) => (
               <div key={h.id} className="p-5 rounded-2xl bg-[#18110D] border border-amber-900/30 flex flex-col md:flex-row justify-between gap-4">
                 <div className="space-y-1">
-                  <span className="text-xs text-amber-400 font-semibold">Dégusté le {h.drunkDate}</span>
+                  <span className="text-xs text-amber-400 font-semibold">Dégusté le {h.drunkDate} · {volumeText(h)}</span>
                   <h3 className="text-lg font-serif font-bold text-amber-100">
                     {h.name} ({h.vintage})
                   </h3>
@@ -2406,9 +2431,11 @@ export default function App() {
                   {getQuantity(selectedWine) === 0 && <button type="button" onClick={() => handleRemoveEmptyReference(selectedWine)} className="text-xs text-stone-400 underline hover:text-amber-200">Retirer la fiche épuisée du casier</button>}
                 </div>
 
+                <BottlePropertiesFields key={selectedWine.id} wine={selectedWine} onChange={changes => patchWine(selectedWine.id, changes)} />
+                <ServiceGuide key={`${accountId}/${selectedWine.id}`} wine={selectedWine} gemini={gemini} onSave={changes => patchWine(selectedWine.id, changes)} />
                 <div className="space-y-2 text-xs">
                   <div className="p-3 rounded-xl bg-stone-900/50 border border-stone-800">
-                    <span className="text-amber-400 font-semibold block mb-0.5">Conseil de service & dégustation :</span>
+                    <span className="text-amber-400 font-semibold block mb-0.5">Note de dégustation enregistrée :</span>
                     <p className="text-stone-300">{selectedWine.tastingAdvice}</p>
                   </div>
                   <div className="p-3 rounded-xl bg-stone-900/50 border border-stone-800">
@@ -2496,6 +2523,7 @@ export default function App() {
                       onClick={() =>
                         setNewWine((prev) => ({
                           ...prev,
+                          ...(prev.volumeSource === 'default' || prev.volumeSource === 'unknown' ? { volumeMl: catKey === 'Vin' ? 750 : null, volumeSource: catKey === 'Vin' ? 'default' : 'unknown' } : {}),
                           category: catKey,
                           type: catInfo.types[0],
                           bottleShape: catInfo.defaultShape,
@@ -2630,6 +2658,7 @@ export default function App() {
                 </div>
               </div>
 
+              <BottlePropertiesFields key={showAddModal ? 'add-open' : 'add-closed'} wine={newWine} onChange={changes => setNewWine(prev => ({ ...prev, ...changes }))} onValidityChange={valid => { addPropertiesValid.current = valid; }} />
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="text-stone-400 block mb-1">Début Apogée</label>
