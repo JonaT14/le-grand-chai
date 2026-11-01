@@ -1,3 +1,5 @@
+import { parseQuantity, normalizeInventory } from './inventory.js';
+
 export const DEFAULT_ACCOUNTS = [
   { id: 'MA-CAVE-PRINCIPALE', name: 'Ma Cave Principale', owner: 'Propriétaire' },
   { id: 'CAVE-DE-PAPA', name: 'Cave de Papa', owner: 'Papa' }
@@ -41,8 +43,12 @@ export function importCellarData(raw) {
     const wall = data.walls.find(w => w.id === wine?.wallId);
     const position = `${wine?.wallId}/${wine?.row}/${wine?.col}`;
     if (!wall || typeof wine.id !== 'string' || typeof wine.name !== 'string' || typeof wine.type !== 'string' || !Number.isInteger(wine.row) || !Number.isInteger(wine.col) || wine.row < 1 || wine.row > wall.rows || wine.col < 1 || wine.col > wall.cols || positions.has(position) || ids.has(wine.id)) throw new Error('La sauvegarde contient une bouteille sans emplacement valide ou des casiers en double.');
+    if (wine.quantity !== undefined) {
+      if (typeof wine.quantity !== 'number') throw new Error('La quantité de chaque référence doit être un nombre entier.');
+      parseQuantity(wine.quantity);
+    }
     positions.add(position); ids.add(wine.id);
   }
   if (data.history.some(h => !h || typeof h.id !== 'string' || typeof h.name !== 'string')) throw new Error('Le carnet de dégustation est invalide.');
-  return { name: typeof value.name === 'string' ? value.name : '', owner: typeof value.owner === 'string' ? value.owner.slice(0, 80) : '', cellar: { walls: data.walls, wines: data.wines, history: data.history } };
+  return { name: typeof value.name === 'string' ? value.name : '', owner: typeof value.owner === 'string' ? value.owner.slice(0, 80) : '', cellar: normalizeInventory({ walls: data.walls, wines: data.wines, history: data.history }) };
 }

@@ -47,6 +47,17 @@ L’import crée une nouvelle cave sans remplacer les caves existantes. Le nom, 
 
 Le logo utilise l’image fournie dans `public/images/cave-grand-chai.jpeg`, à 88 × 88 pixels (contre 44 × 44 auparavant), sur ordinateur et téléphone.
 
+## Quantités de bouteilles
+
+Une fiche peut représenter un lot de bouteilles identiques, pour toutes les boissons : vin, cidre, poiré, spiritueux et autres alcools.
+
+- Le formulaire d’ajout propose un nombre entier de bouteilles, égal à 1 par défaut.
+- La fiche de chaque référence permet de corriger son stock ou d’utiliser les boutons − / +. Une correction de stock n’ajoute pas de dégustation au carnet.
+- « Boire une bouteille » retire exactement une unité et ajoute une entrée au carnet. Le reste du lot, ses photos, ses notes et son emplacement sont conservés.
+- À zéro, la fiche affiche « Stock épuisé », reste disponible pour être réapprovisionnée et ne peut plus être consommée ni recommandée par le sommelier. On peut aussi retirer cette fiche du casier après confirmation, en conservant le carnet.
+- Les anciennes fiches et sauvegardes sans quantité comptent pour une bouteille. Les imports et exports conservent les quantités, y compris zéro.
+- Les casiers affichent la quantité par référence et la cave affiche le total en bouteilles. Les compteurs de capacité des murs restent des compteurs de casiers occupés : un lot de 30 bouteilles est une seule référence dans un casier. Les compteurs de la carte totalisent les bouteilles.
+
 ## Murs, notes et données existantes
 
 - Ajout, renommage et dimensionnement des murs (1 à 12 lignes / colonnes).

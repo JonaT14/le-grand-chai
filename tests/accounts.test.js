@@ -26,7 +26,7 @@ test('storage failure rolls back the new cellar instead of losing existing cella
   assert.equal(storage.values.size, 0);
 });
 test('exports can be imported into an independent copy including images, wall IDs and zero ratings', () => {
-  const cellar = { walls: [{ id: 'a', name: 'Mur', rows: 1, cols: 1 }], wines: [{ id: 'w', name: 'Vin', type: 'Rouge', wallId: 'a', row: 1, col: 1, userRating: 0, customLabelUrl: 'data:image/jpeg;base64,AA==' }], history: [] };
+  const cellar = { walls: [{ id: 'a', name: 'Mur', rows: 1, cols: 1 }], wines: [{ id: 'w', name: 'Vin', type: 'Rouge', quantity: 1, wallId: 'a', row: 1, col: 1, userRating: 0, customLabelUrl: 'data:image/jpeg;base64,AA==' }], history: [] };
   const imported = importCellarData(JSON.stringify({ format: 'le-grand-chai', version: 1, name: 'Chez Marie', cellar }));
   assert.deepEqual(imported.cellar, cellar);
   const storage = memory(); const created = createLocalCellar(storage, loadAccounts(storage), imported.name, '', imported.cellar);
@@ -35,5 +35,5 @@ test('exports can be imported into an independent copy including images, wall ID
   assert.deepEqual(importCellarData(JSON.stringify(cellar)).cellar, cellar);
 });
 test('malformed or overlapping imported positions cannot corrupt an existing cellar', () => {
-  for (const data of ['bad json', '{}', JSON.stringify({ walls: [{ id: 'a', name: 'Mur', rows: 0, cols: 1 }], wines: [], history: [] }), JSON.stringify({ walls: [{ id: 'a', name: 'Mur', rows: 1, cols: 1 }], wines: [{ id: 'w', name: 'Vin', type: 'Rouge', wallId: 'missing', row: 1, col: 1 }], history: [] })]) assert.throws(() => importCellarData(data));
+  for (const data of ['bad json', '{}', JSON.stringify({ walls: [{ id: 'a', name: 'Mur', rows: 0, cols: 1 }], wines: [], history: [] }), JSON.stringify({ walls: [{ id: 'a', name: 'Mur', rows: 1, cols: 1 }], wines: [{ id: 'w', name: 'Vin', type: 'Rouge', quantity: 1, wallId: 'missing', row: 1, col: 1 }], history: [] })]) assert.throws(() => importCellarData(data));
 });

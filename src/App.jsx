@@ -16,6 +16,9 @@ import { loadRemoteLabel, normalizeLabelBox, rankLabelCandidates } from './label
 
 import { verifiedLabelReferences } from './label-catalogue.js';
 
+import { getQuantity, parseQuantity, totalQuantity, consumeBottle, removeEmptyReference } from './inventory.js';
+import QuantityControl from './QuantityControl.jsx';
+
 const CURRENT_YEAR = new Date().getFullYear();
 
 // ============================================================================
@@ -77,7 +80,7 @@ function readPhoto(file) {
 
 function emptyWine() {
   return {
-    category: 'Vin', name: '', appellation: '', region: '', vintage: '', type: 'Rouge', bottleShape: 'bordeaux',
+    category: 'Vin', quantity: 1, name: '', appellation: '', region: '', vintage: '', type: 'Rouge', bottleShape: 'bordeaux',
     grapes: '', peakStart: CURRENT_YEAR, peakEnd: CURRENT_YEAR + 8, drinkLimit: CURRENT_YEAR + 12,
     webRating: null, webReviewCount: 0, webUrl: '', userRating: null, userNotes: '',
     tastingAdvice: '', foodPairing: '', customLabelUrl: null
@@ -1253,6 +1256,7 @@ export default function App() {
   // Statut d'apogée (adapté aux spiritueux)
   const getApogeeInfo = (wine) => {
     const cat = getCategoryFromType(wine.type);
+    if (getQuantity(wine) === 0) return { status: 'empty', label: 'Stock épuisé', badgeClass: 'bg-stone-900 text-stone-400 border-stone-600', dotColor: '#78716C' };
     if (cat === 'Alcool') {
       return {
         status: 'spirit',
@@ -1458,6 +1462,8 @@ export default function App() {
     e.preventDefault();
     setAddError('');
     const epoch = accountEpoch.current;
+    let quantity;
+    try { quantity = parseQuantity(newWine.quantity, 1); } catch (error) { setAddError(error.message); return; }
     let slot = addSlotTarget;
     if (slot) {
       const wall = walls.find(w => w.id === slot.wallId);
@@ -1469,6 +1475,7 @@ export default function App() {
     const created = {
       id: `w_${crypto.randomUUID()}`,
       ...newWine,
+      quantity,
       vintage: newWine.vintage === '' ? null : Number(newWine.vintage),
       peakStart: Number(newWine.peakStart) || CURRENT_YEAR,
       peakEnd: Number(newWine.peakEnd) || CURRENT_YEAR + 5,
@@ -1500,22 +1507,21 @@ export default function App() {
 
   // Marquer une bouteille comme bue
   const handleDrinkBottle = (wine) => {
-    const entry = {
-      id: `h_${Date.now()}`,
-      name: wine.name,
-      appellation: wine.appellation,
-      region: wine.region,
-      vintage: wine.vintage,
-      type: wine.type,
-      drunkDate: new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }),
-      userRating: wine.userRating ?? null,
-      tastingNotes: wine.userNotes || '',
-      guest: 'Cave personnelle'
-    };
-    const nextWines = wines.filter((w) => w.id !== wine.id);
-    const nextHistory = [entry, ...history];
-    updateCellar(walls, nextWines, nextHistory);
-    setSelectedWine(null);
+    const current = cellarRef.current;
+    try {
+      const next = consumeBottle(current.wines, current.history, wine.id);
+      updateCellar(current.walls, next.wines, next.history);
+      setSelectedWine(next.wines.find(w => w.id === wine.id));
+    } catch (error) { setLabelStatusMsg(error.message); }
+  };
+
+  const handleRemoveEmptyReference = wine => {
+    if (!window.confirm(`Retirer la fiche « ${wine.name} » de ce casier ? Le carnet de dégustation sera conservé.`)) return;
+    const current = cellarRef.current;
+    try {
+      updateCellar(current.walls, removeEmptyReference(current.wines, wine.id), current.history);
+      setSelectedWine(null);
+    } catch (error) { setLabelStatusMsg(error.message); }
   };
 
   // Sommelier IA
@@ -1526,11 +1532,11 @@ export default function App() {
     setDishInput(dish);
     setSommelierResult(null);
     setSommelierError('');
-    if (!wines.length) { setSommelierError('Ajoutez une bouteille à votre cave pour obtenir un accord.'); return; }
+    if (!wines.some(w => getQuantity(w) > 0)) { setSommelierError('Ajoutez une bouteille à votre cave pour obtenir un accord.'); return; }
     const epoch = accountEpoch.current;
     setIsAskingSommelier(true);
     try {
-      const inventory = wines.map(w => ({ id: w.id, name: w.name, vintage: w.vintage, type: w.type, appellation: w.appellation, region: w.region, grapes: w.grapes, foodPairing: w.foodPairing, maturity: getApogeeInfo(w).label }));
+      const inventory = wines.filter(w => getQuantity(w) > 0).map(w => ({ id: w.id, quantity: getQuantity(w), name: w.name, vintage: w.vintage, type: w.type, appellation: w.appellation, region: w.region, grapes: w.grapes, foodPairing: w.foodPairing, maturity: getApogeeInfo(w).label }));
       const { value } = await gemini({ schema: SOMMELIER_SCHEMA,
         prompt: `Tu es sommelier. Pour cette demande ${JSON.stringify(dish)}, propose la meilleure bouteille de cet inventaire et une alternative pertinente si possible : ${JSON.stringify(inventory)}. Retourne bestWineId et secondWineId (identifiants exacts, jamais inventés), reason (explication précise de l'accord, en tenant compte des ingrédients et de la cuisson) et serviceTip (température, carafage). Si aucun accord n'est idéal, explique la limite honnêtement. Ne recommande aucune bouteille hors de cet inventaire.`
       });
@@ -1543,10 +1549,10 @@ export default function App() {
     }
   };
 
-  const liveSommelierResult = sommelierResult && wines.some(w => w.id === sommelierResult.best.id) ? {
+  const liveSommelierResult = sommelierResult && wines.some(w => w.id === sommelierResult.best.id && getQuantity(w) > 0) ? {
     ...sommelierResult,
     best: wines.find(w => w.id === sommelierResult.best.id),
-    alternative: wines.find(w => w.id === sommelierResult.alternative?.id) || null
+    alternative: wines.find(w => w.id === sommelierResult.alternative?.id && getQuantity(w) > 0) || null
   } : null;
 
   const activeWall = walls.find((w) => w.id === selectedWallId) || walls[0];
@@ -1722,6 +1728,10 @@ export default function App() {
               </div>
             </div>
 
+            <p aria-live="polite" aria-label="Stock total de la cave" className="text-sm text-amber-200">
+              <strong>{totalQuantity(wines)} bouteille{totalQuantity(wines) === 1 ? '' : 's'}</strong> en stock · {wines.length} référence{wines.length === 1 ? '' : 's'} · Les compteurs des murs indiquent les casiers occupés.
+            </p>
+
             {movingWine && (
               <div className="p-3 rounded-xl bg-amber-900/40 border border-amber-500 text-amber-200 flex items-center justify-between text-sm">
                 <span>
@@ -1771,7 +1781,7 @@ export default function App() {
                         }}
                         style={{ opacity: matchesFilter ? 1 : 0.25 }}
                         aria-label={bottle ? `${bottle.name}, rangée ${row}, casier ${col}` : `Casier libre, rangée ${row}, colonne ${col}`}
-                        className="group relative h-56 rounded-2xl bg-gradient-to-b from-[#1A0F0A] via-[#110906] to-[#24150E] border-2 border-[#472A1B] hover:border-amber-500/80 shadow-inner flex flex-col items-center justify-between p-2.5 cursor-pointer transition-all"
+                        className="group relative h-64 rounded-2xl bg-gradient-to-b from-[#1A0F0A] via-[#110906] to-[#24150E] border-2 border-[#472A1B] hover:border-amber-500/80 shadow-inner flex flex-col items-center justify-between p-2.5 cursor-pointer transition-all"
                       >
                         {/* Éclairage spot chaud de cave */}
                         <div className="absolute inset-x-4 top-0 h-16 bg-gradient-to-b from-amber-500/15 to-transparent pointer-events-none rounded-t-xl" />
@@ -1809,6 +1819,7 @@ export default function App() {
                             <div className="text-[9px] font-semibold opacity-85">
                               {bottle.vintage} • {bottle.type}
                             </div>
+                            <div className="text-[11px] font-bold">{getQuantity(bottle) === 0 ? 'Stock épuisé' : `${getQuantity(bottle)} bouteille${getQuantity(bottle) === 1 ? '' : 's'}`}</div>
                           </div>
                         ) : (
                           <div className="w-full h-6 rounded-md bg-stone-950/40 border border-stone-800/40" />
@@ -1826,7 +1837,7 @@ export default function App() {
         {activeTab === 'apogee' && (
           <div className="p-4 md:p-8 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {wines.map((wine) => {
+              {wines.filter(w => getQuantity(w) > 0).map((wine) => {
                 const ap = getApogeeInfo(wine);
                 const wallName = walls.find((w) => w.id === wine.wallId)?.name || wine.wallId;
                 return (
@@ -1845,7 +1856,7 @@ export default function App() {
                         {wine.appellation} • <strong>{wine.vintage}</strong> ({wine.type})
                       </p>
                       <p className="text-xs text-amber-400/90">
-                        📍 {wallName} — Rangée {wine.row}, Casier {wine.col}
+                        📍 {wallName} — Rangée {wine.row}, Casier {wine.col} · {getQuantity(wine)} bouteille(s)
                       </p>
                     </div>
                   </div>
@@ -2043,7 +2054,7 @@ export default function App() {
                       if (mapFilterType === 'Alcool') return getCategoryFromType(w.type) === 'Alcool';
                       return w.type === mapFilterType;
                     });
-                    const count = regionBottles.length;
+                    const count = totalQuantity(regionBottles);
                     const isSelected = selectedMapRegion === reg.id;
 
                     return (
@@ -2152,7 +2163,7 @@ export default function App() {
                       <div>
                         <div className="text-sm font-serif font-bold text-amber-100">{w.name}</div>
                         <div className="text-xs text-stone-400">
-                          {w.appellation} • {w.vintage} • <span className="text-amber-400">{w.type}</span>
+                          {w.appellation} • {w.vintage} • <span className="text-amber-400">{w.type}</span> · {getQuantity(w)} bouteille(s)
                         </div>
                       </div>
                       <ChevronRight className="w-4 h-4 text-amber-400" />
@@ -2370,6 +2381,12 @@ export default function App() {
                   </div>
                 </div>
 
+                <div className="p-3 rounded-xl bg-stone-900/70 border border-amber-900/40 space-y-2">
+                  <QuantityControl value={getQuantity(selectedWine)} onChange={quantity => patchWine(selectedWine.id, { quantity })} />
+                  <p className="text-[11px] text-stone-400">Ajustez le stock ici. « Boire une bouteille » retire une unité et l’ajoute au carnet. À zéro, la fiche reste disponible pour un réapprovisionnement.</p>
+                  {getQuantity(selectedWine) === 0 && <button type="button" onClick={() => handleRemoveEmptyReference(selectedWine)} className="text-xs text-stone-400 underline hover:text-amber-200">Retirer la fiche épuisée du casier</button>}
+                </div>
+
                 <div className="space-y-2 text-xs">
                   <div className="p-3 rounded-xl bg-stone-900/50 border border-stone-800">
                     <span className="text-amber-400 font-semibold block mb-0.5">Conseil de service & dégustation :</span>
@@ -2415,11 +2432,12 @@ export default function App() {
                   Déplacer de casier
                 </button>
                 <button
+                  disabled={getQuantity(selectedWine) === 0}
                   onClick={() => handleDrinkBottle(selectedWine)}
                   className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-gradient-to-r from-red-800 to-amber-700 hover:from-red-700 hover:to-amber-600 text-white text-xs font-bold shadow-lg"
                 >
                   <Wine className="w-4 h-4" />
-                  Boire cette bouteille (Archiver au carnet)
+                  Boire une bouteille (Retirer 1 et archiver)
                 </button>
               </div>
             </div>
@@ -2630,6 +2648,7 @@ export default function App() {
                 />
               </div>
 
+              <QuantityControl label="Nombre de bouteilles à ajouter" value={newWine.quantity} minimum={1} onChange={quantity => setNewWine(prev => ({ ...prev, quantity }))} />
               <RatingInput value={newWine.userRating} onChange={value => setNewWine({ ...newWine, userRating: value })} />
               {addError && <p role="alert" className="text-amber-200">{addError}</p>}
               <button
@@ -2701,12 +2720,12 @@ export default function App() {
                 <label className="text-stone-400">Colonnes
                   <input aria-label={`Colonnes de ${w.name}`} type="number" min="1" max="12" value={w.cols} onChange={e => configureWall(w.id, 'cols', e.target.value)} className="block w-full mt-1 px-2 py-1 rounded bg-stone-950 border border-stone-700" />
                 </label>
-                <span className="text-stone-400">{wines.filter(b => b.wallId === w.id).length} bouteille(s) / {w.rows * w.cols} places</span>
+                <span className="text-stone-400">{wines.filter(b => b.wallId === w.id).length} référence(s) / {w.rows * w.cols} places · {totalQuantity(wines.filter(b => b.wallId === w.id))} bouteille(s)</span>
                 <button disabled={walls.length <= 1} onClick={() => { setDeletingWallId(w.id); setDestinationWallId(walls.find(other => other.id !== w.id)?.id || ''); setWallError(''); }} className="text-red-300 text-right disabled:opacity-40">Supprimer {w.name}</button>
               </div>)}
             </div>
             {deletingWallId && <div className="p-3 rounded-xl border border-red-900 space-y-3 text-sm">
-              <p>Supprimer « {walls.find(w => w.id === deletingWallId)?.name} » ? Les {wines.filter(w => w.wallId === deletingWallId).length} bouteille(s) seront transférées vers les places libres du mur choisi.</p>
+              <p>Supprimer « {walls.find(w => w.id === deletingWallId)?.name} » ? Les {wines.filter(w => w.wallId === deletingWallId).length} référence(s), soit {totalQuantity(wines.filter(w => w.wallId === deletingWallId))} bouteille(s), seront transférées vers les places libres du mur choisi.</p>
               <label className="block text-xs text-stone-400">Transférer les bouteilles vers
                 <select aria-label="Mur de destination" value={destinationWallId} onChange={e => setDestinationWallId(e.target.value)} className="block w-full mt-1 bg-stone-950 p-2 rounded-lg">
                   {walls.filter(w => w.id !== deletingWallId).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
