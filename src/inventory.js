@@ -1,3 +1,4 @@
+import { getVolumeMl } from './bottle-properties.js';
 // Older cellars stored one bottle per reference and had no quantity field.
 export function getQuantity(wine) {
   return Number.isSafeInteger(wine?.quantity) && wine.quantity >= 0 ? wine.quantity : 1;
@@ -25,6 +26,7 @@ export function consumeBottle(wines, history, id, date = new Date()) {
   const entry = {
     id: `h_${crypto.randomUUID()}`, sourceWineId: wine.id, quantity: 1,
     name: wine.name, appellation: wine.appellation, region: wine.region, vintage: wine.vintage, type: wine.type,
+    volumeMl: getVolumeMl(wine), closure: wine.closure || 'unknown',
     drunkDate: date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }),
     userRating: wine.userRating ?? null, tastingNotes: wine.userNotes || '', guest: 'Cave personnelle'
   };

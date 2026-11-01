@@ -1,3 +1,4 @@
+import { CLOSURES, validVolume } from './bottle-properties.js';
 import { normalizeInventory } from './inventory.js';
 
 export function findFreeSlot(walls, wines, preferredWallId) {
@@ -55,5 +56,9 @@ export function scanFields(value, categories) {
   const fields = { name: value.name.trim(), category, type: value.type, bottleShape: categories[category].defaultShape };
   for (const key of ['appellation', 'region', 'grapes']) fields[key] = typeof value[key] === 'string' ? value[key] : '';
   fields.vintage = Number.isInteger(value.vintage) && value.vintage >= 1800 && value.vintage <= new Date().getFullYear() ? value.vintage : '';
+  if (value.volumeMl !== undefined && !validVolume(value.volumeMl)) throw new Error('Contenance invalide. Corrigez la fiche.');
+  fields.volumeMl = value.volumeMl === undefined || value.volumeMl === null && value.volumeSource !== 'manual' ? (category === 'Vin' ? 750 : null) : value.volumeMl;
+  fields.volumeSource = value.volumeSource === 'manual' ? 'manual' : value.volumeMl == null ? (category === 'Vin' ? 'default' : 'unknown') : ['manual','scan','catalogue','default','unknown'].includes(value.volumeSource) ? value.volumeSource : 'scan';
+  fields.closure = Object.hasOwn(CLOSURES, value.closure) ? value.closure : 'unknown';
   return fields;
 }

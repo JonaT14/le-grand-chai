@@ -1,3 +1,4 @@
+import { catalogueVolume, getVolumeMl } from './bottle-properties.js';
 import { findFreeSlot, scanFields } from './cellar.js';
 import { parseQuantity } from './inventory.js';
 
@@ -78,6 +79,7 @@ export function barcodeProduct(data, code) {
   return {
     name: brand && !name.toLocaleLowerCase('fr').includes(brand.toLocaleLowerCase('fr')) ? `${brand} — ${name}` : name,
     appellation: text(product.appellation), region: text(product.origins), grapes: '', vintage: '', category, type,
+    volumeMl: catalogueVolume(product) ?? (category === 'Vin' ? 750 : null), volumeSource: catalogueVolume(product) === null ? (category === 'Vin' ? 'default' : 'unknown') : 'catalogue', closure: 'unknown',
     barcode: code, barcodeSource: `https://world.openfoodfacts.org/product/${code}`
   };
 }
@@ -91,7 +93,7 @@ export async function lookupBarcode(raw, { signal, fetchImpl = fetch, useCache =
   if (signal?.aborted) controller.abort();
   const timer = setTimeout(abort, 15000);
   try {
-    const response = await fetchImpl(`https://world.openfoodfacts.org/api/v3/product/${code}?fields=code,product_name,product_name_fr,brands,categories,categories_tags,origins,appellation`, { signal: controller.signal, referrerPolicy: 'no-referrer' });
+    const response = await fetchImpl(`https://world.openfoodfacts.org/api/v3/product/${code}?fields=code,product_name,product_name_fr,brands,categories,categories_tags,origins,appellation,quantity,product_quantity,product_quantity_unit`, { signal: controller.signal, referrerPolicy: 'no-referrer' });
     if (response.status === 404) throw new Error('Ce code-barres n’est pas renseigné dans le catalogue. Photographiez l’étiquette ou complétez la fiche manuellement.');
     if (!response.ok) throw new Error('Le catalogue est momentanément indisponible. Réessayez plus tard ou photographiez l’étiquette.');
     const result = barcodeProduct(await response.json(), code);
@@ -106,7 +108,7 @@ export async function lookupBarcode(raw, { signal, fetchImpl = fetch, useCache =
 }
 
 const normalizeName = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('fr').replace(/\s+/g, ' ');
-export const sameScanReference = (a, b) => normalizeName(a.name) === normalizeName(b.name) && a.type === b.type && String(a.vintage ?? '') === String(b.vintage ?? '') && (!a.appellation || !b.appellation || normalizeName(a.appellation) === normalizeName(b.appellation));
+export const sameScanReference = (a, b) => normalizeName(a.name) === normalizeName(b.name) && a.type === b.type && String(a.vintage ?? '') === String(b.vintage ?? '') && getVolumeMl(a) === getVolumeMl(b) && (!(a.closure && b.closure && a.closure !== 'unknown' && b.closure !== 'unknown') || a.closure === b.closure) && (!a.appellation || !b.appellation || normalizeName(a.appellation) === normalizeName(b.appellation));
 export function matchingScanWines(wines, draft) { return draft?.name?.trim() ? wines.filter(wine => sameScanReference(wine, draft)) : []; }
 
 export function validateScanDraft(draft, categories) {

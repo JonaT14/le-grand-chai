@@ -1,3 +1,4 @@
+import { validVolume, CLOSURES } from './bottle-properties.js';
 import { parseQuantity, normalizeInventory } from './inventory.js';
 
 export const DEFAULT_ACCOUNTS = [
@@ -47,6 +48,8 @@ export function importCellarData(raw) {
       if (typeof wine.quantity !== 'number') throw new Error('La quantité de chaque référence doit être un nombre entier.');
       parseQuantity(wine.quantity);
     }
+    if (wine.volumeMl !== undefined && !validVolume(wine.volumeMl)) throw new Error('La contenance d’une bouteille est invalide.');
+    if (wine.closure !== undefined && !Object.hasOwn(CLOSURES, wine.closure)) throw new Error('Le bouchage d’une bouteille est invalide.');
     positions.add(position); ids.add(wine.id);
   }
   if (data.history.some(h => !h || typeof h.id !== 'string' || typeof h.name !== 'string')) throw new Error('Le carnet de dégustation est invalide.');
