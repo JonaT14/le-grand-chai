@@ -19,6 +19,8 @@ import { verifiedLabelReferences } from './label-catalogue.js';
 
 import { getQuantity, parseQuantity, totalQuantity, consumeBottle, removeEmptyReference } from './inventory.js';
 import QuantityControl from './QuantityControl.jsx';
+import BottleScanner from './BottleScanner.jsx';
+import { planScanImport, normalizeBarcode, saveScanPhoto } from './scanner.js';
 
 const CURRENT_YEAR = new Date().getFullYear();
 
@@ -81,7 +83,7 @@ function readPhoto(file) {
 
 function emptyWine() {
   return {
-    category: 'Vin', quantity: 1, name: '', appellation: '', region: '', vintage: '', type: 'Rouge', bottleShape: 'bordeaux',
+    category: 'Vin', quantity: 1, barcode: '', barcodeSource: '', name: '', appellation: '', region: '', vintage: '', type: 'Rouge', bottleShape: 'bordeaux',
     grapes: '', peakStart: CURRENT_YEAR, peakEnd: CURRENT_YEAR + 8, drinkLimit: CURRENT_YEAR + 12,
     webRating: null, webReviewCount: 0, webUrl: '', userRating: null, userNotes: '',
     tastingAdvice: '', foodPairing: '', customLabelUrl: null
@@ -1060,6 +1062,7 @@ export default function App() {
   const [accountMessage, setAccountMessage] = useState('');
 
 
+  const [loadedAccountId, setLoadedAccountId] = useState(null);
   const [walls, setWalls] = useState(DEFAULT_WALLS);
   const [wines, setWines] = useState(DEFAULT_WINES);
   const [history, setHistory] = useState(DEFAULT_HISTORY);
@@ -1094,9 +1097,7 @@ export default function App() {
   const [labelDraft, setLabelDraft] = useState(null);
 
   // États du Scanner IA
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanPreview, setScanPreview] = useState(null);
-  const [scanError, setScanError] = useState('');
+  const [scanImportMessage, setScanImportMessage] = useState('');
   const [sommelierError, setSommelierError] = useState('');
   const [wallError, setWallError] = useState('');
   const [deletingWallId, setDeletingWallId] = useState(null);
@@ -1131,7 +1132,7 @@ export default function App() {
     setWebSearchGrounding(null);
     setLabelDraft(null);
     setAddSlotTarget(null);
-    setIsScanning(false);
+    setScanImportMessage('');
     setIsFetchingLabel(false);
     setIsAskingSommelier(false);
     localStorage.setItem('lgc_active_account', accountId);
@@ -1154,11 +1155,12 @@ export default function App() {
     } catch (e) {
       console.error(e);
     }
+    setLoadedAccountId(accountId);
   }, [accountId]);
 
   // Sauvegarde locale + Google Drive Kava 20
-  const saveCellarData = async (nextWalls = walls, nextWines = wines, nextHistory = history) => {
-    const payload = {
+  const saveCellarData = async (nextWalls = walls, nextWines = wines, nextHistory = history, persistedPayload = null) => {
+    const payload = persistedPayload || {
       folderName: 'Kava 20',
       accountId,
       updatedAt: new Date().toISOString(),
@@ -1166,7 +1168,7 @@ export default function App() {
       wines: nextWines,
       history: nextHistory
     };
-    try {
+    if (!persistedPayload) try {
       localStorage.setItem(`lgc_cellar_data_${accountId}`, JSON.stringify(payload));
     } catch {
       setSyncStatus('Mémoire locale pleine : exportez votre cave avant de fermer cette page.');
@@ -1189,12 +1191,18 @@ export default function App() {
     }
   };
 
-  const updateCellar = (nextWalls, nextWines, nextHistory) => {
+  const updateCellar = (nextWalls, nextWines, nextHistory, persistFirst = false) => {
+    let persistedPayload = null;
+    if (persistFirst) {
+      persistedPayload = { folderName: 'Kava 20', accountId, updatedAt: new Date().toISOString(), walls: nextWalls, wines: nextWines, history: nextHistory };
+      try { localStorage.setItem(`lgc_cellar_data_${accountId}`, JSON.stringify(persistedPayload)); }
+      catch { throw new Error('La mémoire du navigateur est pleine. Rien n’a été ajouté. Exportez votre cave ou réduisez la sélection avant de réessayer.'); }
+    }
     cellarRef.current = { walls: nextWalls, wines: nextWines, history: nextHistory };
     setWalls(nextWalls);
     setWines(nextWines);
     setHistory(nextHistory);
-    saveCellarData(nextWalls, nextWines, nextHistory);
+    saveCellarData(nextWalls, nextWines, nextHistory, persistedPayload);
   };
 
   const patchWine = (id, changes, epoch = accountEpoch.current) => {
@@ -1442,33 +1450,22 @@ export default function App() {
     }
   };
 
-  const handleScannerFileChange = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file || isScanning) return;
-    const epoch = accountEpoch.current;
-    setIsScanning(true);
-    setScanError('');
-    setScanPreview(null);
-    try {
-      const photo = await readPhoto(file);
-      if (epoch !== accountEpoch.current) return;
-      setScanPreview(photo);
-      const { value } = await gemini({ image: photo, schema: SCAN_SCHEMA,
-        prompt: `Lis cette étiquette de bouteille. Extrais uniquement les informations lisibles : name (domaine, marque et cuvée), appellation, region, vintage (année, ou null si absente), grapes (cépages ou variétés). Classe la boisson avec category et type parmi : ${JSON.stringify(Object.fromEntries(Object.entries(DRINK_CATEGORIES).map(([cat, data]) => [cat, data.types])))}. Pour une image sans étiquette lisible, renvoie name vide. N'invente ni notes, ni millésime, ni dates de garde.`
-      });
-      const fields = scanFields(value, DRINK_CATEGORIES);
-      const label = await fetchImageAsLabelDataUrl(photo);
-      if (epoch !== accountEpoch.current) return;
-      setNewWine({ ...emptyWine(), ...fields, customLabelUrl: label });
-      setAddError('');
-      setShowScannerModal(false);
-      setShowAddModal(true);
-    } catch (error) {
-      if (epoch === accountEpoch.current) setScanError(error.message);
-    } finally {
-      if (epoch === accountEpoch.current) setIsScanning(false);
-    }
+  const analyzeScanLabel = async (photo, signal) => {
+    const { value } = await gemini({ image: photo, schema: SCAN_SCHEMA, signal,
+      prompt: `Lis cette étiquette de bouteille. Extrais uniquement les informations lisibles : name (domaine, marque et cuvée), appellation, region, vintage (année, ou null si absente), grapes (cépages ou variétés). Classe la boisson avec category et type parmi : ${JSON.stringify(Object.fromEntries(Object.entries(DRINK_CATEGORIES).map(([cat, data]) => [cat, data.types])))}. Pour une image sans étiquette lisible, renvoie name vide. N'invente ni notes, ni millésime, ni dates de garde.`
+    });
+    return scanFields(value, DRINK_CATEGORIES);
+  };
+
+  const handleScannedDraft = draft => {
+    setNewWine(draft); setAddError(''); setShowScannerModal(false); setShowAddModal(true);
+  };
+  const handleScanImport = selections => {
+    const current = cellarRef.current;
+    const result = planScanImport(current, selections, { categories: DRINK_CATEGORIES, defaults: emptyWine(), preferredWallId: selectedWallId });
+    updateCellar(current.walls, result.wines, current.history, true);
+    setScanImportMessage(`${result.bottles} bouteille(s) ajoutée(s) : ${result.added} nouvelle(s) fiche(s), ${result.restocked} réapprovisionnement(s). Les photos et quantités sont enregistrées.`);
+    setShowScannerModal(false);
   };
 
   // Ajouter la bouteille dans la cave
@@ -1476,8 +1473,11 @@ export default function App() {
     e.preventDefault();
     setAddError('');
     const epoch = accountEpoch.current;
-    let quantity;
-    try { quantity = parseQuantity(newWine.quantity, 1); } catch (error) { setAddError(error.message); return; }
+    let quantity, barcode = '';
+    try {
+      quantity = parseQuantity(newWine.quantity, 1);
+      if (newWine.barcode?.trim()) barcode = normalizeBarcode(newWine.barcode);
+    } catch (error) { setAddError(error.message); return; }
     let slot = addSlotTarget;
     if (slot) {
       const wall = walls.find(w => w.id === slot.wallId);
@@ -1489,7 +1489,7 @@ export default function App() {
     const created = {
       id: `w_${crypto.randomUUID()}`,
       ...newWine,
-      quantity,
+      quantity, barcode,
       vintage: newWine.vintage === '' ? null : Number(newWine.vintage),
       peakStart: Number(newWine.peakStart) || CURRENT_YEAR,
       peakEnd: Number(newWine.peakEnd) || CURRENT_YEAR + 5,
@@ -1513,7 +1513,8 @@ export default function App() {
     if (!freeSlot) { setAddError('Votre cave est pleine. Ajoutez un mur.'); return; }
     const occupied = current.wines.some(w => w.wallId === slot.wallId && w.row === slot.row && w.col === slot.col);
     if (occupied) Object.assign(created, freeSlot);
-    updateCellar(current.walls, [...current.wines, created], current.history);
+    try { updateCellar(current.walls, [...current.wines, created], current.history, true); }
+    catch (error) { setAddError(error.message); return; }
     setNewWine(emptyWine());
     setShowAddModal(false);
     setAddSlotTarget(null);
@@ -1665,13 +1666,15 @@ export default function App() {
               <Cloud className="w-5 h-5" />
             </button>
             <button
-              onClick={() => { setScanError(''); setScanPreview(null); setShowScannerModal(true); }}
+              disabled={loadedAccountId !== accountId}
+              onClick={() => { setScanImportMessage(''); setShowScannerModal(true); }}
               className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs md:text-sm shadow-lg transition"
             >
               <Camera className="w-4 h-4" />
               <span>Scanner</span>
             </button>
             <button
+              disabled={loadedAccountId !== accountId}
               onClick={() => {
                 setAddSlotTarget(null);
                 setNewWine(emptyWine());
@@ -1745,6 +1748,7 @@ export default function App() {
             <p aria-live="polite" aria-label="Stock total de la cave" className="text-sm text-amber-200">
               <strong>{totalQuantity(wines)} bouteille{totalQuantity(wines) === 1 ? '' : 's'}</strong> en stock · {wines.length} référence{wines.length === 1 ? '' : 's'} · Les compteurs des murs indiquent les casiers occupés.
             </p>
+            {scanImportMessage && <p role="status" className="text-sm text-amber-200 mt-2">{scanImportMessage}</p>}
 
             {movingWine && (
               <div className="p-3 rounded-xl bg-amber-900/40 border border-amber-500 text-amber-200 flex items-center justify-between text-sm">
@@ -2354,7 +2358,8 @@ export default function App() {
                     <h3 className="text-2xl font-serif font-bold text-amber-100 mt-0.5">
                       {selectedWine.name} ({selectedWine.vintage || 'Sans millésime'})
                     </h3>
-                    <p className="text-sm text-stone-400">{selectedWine.appellation}</p>
+                    {typeof selectedWine.barcode === 'string' && /^(?:\d{8}|\d{12}|\d{13}|\d{14})$/.test(selectedWine.barcode) && <p className="text-xs text-stone-400">Code-barres : {selectedWine.barcode}{selectedWine.barcodeSource && <> · <a href={`https://world.openfoodfacts.org/product/${selectedWine.barcode}`} target="_blank" rel="noreferrer" className="text-amber-300 underline">Source Open Food Facts</a></>}</p>}
+                  <p className="text-sm text-stone-400">{selectedWine.appellation}</p>
                   </div>
                   <button
                     aria-label="Fermer la bouteille"
@@ -2476,6 +2481,10 @@ export default function App() {
 
             <form onSubmit={handleAddWineSubmit} className="space-y-4 text-xs">
               {newWine.customLabelUrl && <div className="flex items-center gap-3 p-3 rounded-xl bg-stone-900"><img src={newWine.customLabelUrl} alt="Photo à vérifier" className="w-16 h-20 object-contain" /><p className="text-stone-400">Vérifiez les informations lues sur l’étiquette. Les dates de garde proposées restent à adapter à votre bouteille.</p></div>}
+              {newWine.barcodeSource && <p className="text-amber-200">Référence issue d’<a href={newWine.barcodeSource} target="_blank" rel="noreferrer" className="underline">Open Food Facts</a>. Vérifiez le type et le millésime sur votre bouteille ; un code-barres ne garantit pas l’année.</p>}
+              <label className="block text-stone-400">Code-barres (facultatif)
+                <input aria-label="Code-barres de la bouteille" inputMode="numeric" value={newWine.barcode || ''} onChange={e => setNewWine({ ...newWine, barcode: e.target.value, barcodeSource: '' })} className="block w-full mt-1 px-3 py-2 rounded-xl bg-stone-950 border border-amber-900/50 text-stone-100" />
+              </label>
               {/* Sélecteur de Catégorie : Vin / Cidre / Spiritueux */}
               <div>
                 <label className="text-amber-300 font-semibold block mb-1.5">Catégorie de bouteille :</label>
@@ -2676,44 +2685,12 @@ export default function App() {
         </div>
       )}
 
-      {/* MODALE SCANNER APPAREIL PHOTO */}
-      {showScannerModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#18100C] border-2 border-amber-700/50 rounded-3xl max-w-md w-full p-6 space-y-4 text-center">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-serif font-bold text-amber-100">Scanner une bouteille (Vin, Cidre, Alcool)</h3>
-              <button aria-label="Fermer le scanner" disabled={isScanning} onClick={() => setShowScannerModal(false)} className="text-stone-400">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <p className="text-xs text-stone-400">
-              Photographiez l’étiquette de près, sans reflet. Google IA lit les informations visibles et pré-remplit la fiche, que vous pourrez vérifier avant l’ajout.
-            </p>
-            <label className="block p-8 rounded-2xl border-2 border-dashed border-amber-600/60 bg-stone-950/70 hover:bg-stone-900 cursor-pointer transition">
-              <Camera className="w-10 h-10 text-amber-400 mx-auto mb-2" />
-              <span className="text-sm font-bold text-amber-200 block">
-                {isScanning ? 'Analyse IA en cours...' : 'Ouvrir l’appareil photo / Choisir une photo'}
-              </span>
-              <input
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={handleScannerFileChange}
-                disabled={isScanning}
-                aria-label="Photo à analyser"
-                className="hidden"
-              />
-            </label>
-            {scanPreview && <img src={scanPreview} alt="Étiquette photographiée" className="max-h-40 mx-auto rounded-xl" />}
-            {scanError && <p role="alert" className="text-sm text-amber-200">{scanError}</p>}
-            {!aiAvailable && <button onClick={() => { setCloudTab('ai'); setShowCloudModal(true); }} className="text-amber-400 underline text-xs">Configurer Google IA</button>}
-            {scanPreview && !isScanning && <button onClick={() => {
-              setNewWine({ ...emptyWine(), customLabelUrl: scanPreview });
-              setAddError(''); setShowScannerModal(false); setShowAddModal(true);
-            }} className="text-xs text-amber-300 underline">Garder cette photo et remplir la fiche manuellement</button>}
-          </div>
-        </div>
-      )}
+      {showScannerModal && <BottleScanner key={accountId}
+        categories={DRINK_CATEGORIES} wines={wines} makeDraft={emptyWine}
+        preparePhoto={readPhoto} savePhoto={saveScanPhoto} analyzeLabel={analyzeScanLabel}
+        onDraft={handleScannedDraft} onImport={handleScanImport} onClose={() => setShowScannerModal(false)}
+        aiAvailable={aiAvailable} onConfigureAI={() => { setShowScannerModal(false); setCloudTab('ai'); setShowCloudModal(true); }}
+      />}
 
       {/* MODALE CONFIGURATION DES MURS */}
       {showWallConfig && (
