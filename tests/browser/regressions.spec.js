@@ -45,7 +45,9 @@ test('personal rating including zero persists and remains editable in tasting hi
   await seed(page); await page.goto('/'); await openMargaux(page);
   await page.getByLabel('Ma note', { exact: true }).selectOption('0');
   expect((await stored(page)).wines.find(w => w.id === 'w1').userRating).toBe(0);
-  await page.getByRole('button', { name: 'Boire cette bouteille (Archiver au carnet)', exact: true }).click();
+  await page.getByRole('button', { name: 'Boire une bouteille (Retirer 1 et archiver)', exact: true }).click();
+  await expect(page.getByLabel('Quantité en stock', { exact: true })).toHaveValue('0');
+  await page.getByRole('button', { name: 'Fermer la bouteille' }).click();
   await page.getByRole('button', { name: 'Carnet de Dégustation', exact: true }).click();
   const note = page.getByLabel('Note de dégustation de Château Margaux', { exact: true });
   await expect(note).toHaveValue('0');

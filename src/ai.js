@@ -1,3 +1,5 @@
+import { getQuantity } from './inventory.js';
+
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
 
 export function readGeminiKey(storage) {
@@ -91,12 +93,12 @@ export const LABEL_SCHEMA = {
 };
 
 export function resolveSommelier(value, wines) {
-  const best = wines.find(w => w.id === value.bestWineId);
+  const best = wines.find(w => w.id === value.bestWineId && getQuantity(w) > 0);
   if (!best || typeof value.reason !== 'string' || !value.reason.trim()) {
     throw new Error('Google n’a pas proposé une bouteille disponible avec une explication. Précisez votre demande et réessayez.');
   }
   return {
-    best, alternative: wines.find(w => w.id === value.secondWineId && w.id !== best.id) || null,
+    best, alternative: wines.find(w => w.id === value.secondWineId && w.id !== best.id && getQuantity(w) > 0) || null,
     reason: value.reason, serviceTip: typeof value.serviceTip === 'string' ? value.serviceTip : best.tastingAdvice
   };
 }

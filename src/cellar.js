@@ -1,3 +1,5 @@
+import { normalizeInventory } from './inventory.js';
+
 export function findFreeSlot(walls, wines, preferredWallId) {
   const ordered = [...walls].sort((a, b) => Number(b.id === preferredWallId) - Number(a.id === preferredWallId));
   for (const wall of ordered) {
@@ -38,12 +40,12 @@ export function removeWall(walls, wines, id, destinationId) {
 
 export function loadCellar(storage, accountId) {
   const current = storage.getItem(`lgc_cellar_data_${accountId}`);
-  if (current) return JSON.parse(current);
+  if (current) return normalizeInventory(JSON.parse(current));
   const legacy = ['walls', 'wines', 'history'].map(field => storage.getItem(`kava20_${field}_${accountId}`));
   if (!legacy.some(value => value !== null)) return null;
   const data = Object.fromEntries(['walls', 'wines', 'history'].map((field, i) => [field, legacy[i] ? JSON.parse(legacy[i]) : []]));
   storage.setItem(`lgc_cellar_data_${accountId}`, JSON.stringify(data));
-  return data;
+  return normalizeInventory(data);
 }
 
 export function scanFields(value, categories) {
